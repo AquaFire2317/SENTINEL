@@ -3,21 +3,89 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SENTINEL Demo</title>
+    <title>SENTINEL - AI Agent Security</title>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        background: #0a0a0f;
+        color: #e0e0e0;
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+      main {
+        background: #12121a;
+        border: 1px solid #2a2a3a;
+        border-radius: 12px;
+        padding: 40px;
+        max-width: 600px;
+        width: 90%;
+        box-shadow: 0 0 40px rgba(0, 200, 150, 0.05);
+      }
+      h1 {
+        font-size: 2rem;
+        color: #00c896;
+        margin-bottom: 8px;
+        letter-spacing: 2px;
+      }
+      .subtitle {
+        color: #888;
+        margin-bottom: 30px;
+        font-size: 0.95rem;
+      }
+      #run {
+        background: linear-gradient(135deg, #00c896, #00a0e0);
+        color: #000;
+        border: none;
+        padding: 14px 28px;
+        font-size: 1rem;
+        font-weight: 600;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: transform 0.15s, box-shadow 0.15s;
+      }
+      #run:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 20px rgba(0, 200, 150, 0.3);
+      }
+      #run:active { transform: translateY(0); }
+      #result {
+        margin-top: 24px;
+        background: #0a0a12;
+        border: 1px solid #1a1a2a;
+        border-radius: 8px;
+        padding: 20px;
+        font-family: 'Fira Code', 'Consolas', monospace;
+        font-size: 0.85rem;
+        white-space: pre-wrap;
+        max-height: 400px;
+        overflow-y: auto;
+        color: #aaa;
+      }
+      .status { color: #00c896; }
+      .error { color: #ff4444; }
+    </style>
   </head>
   <body>
     <main id="app">
       <h1>SENTINEL</h1>
-      <p>Autonomous reliability and security engineer for AI agents.</p>
+      <p class="subtitle">Autonomous reliability &amp; security engineer for AI agents</p>
       <button id="run">Run Poisoned Supplier Attack</button>
-      <pre id="result">Ready.</pre>
+      <pre id="result"><span class="status">Ready.</span></pre>
     </main>
     <script>
+      const result = document.getElementById("result");
       document.getElementById("run").onclick = async () => {
-        const result = document.getElementById("result");
-        result.textContent = "Running attack...";
-        const response = await fetch("/runs", { method: "POST" });
-        result.textContent = JSON.stringify(await response.json(), null, 2);
+        result.innerHTML = '<span class="status">Running attack...</span>';
+        try {
+          const response = await fetch("/runs", { method: "POST" });
+          const data = await response.json();
+          result.textContent = JSON.stringify(data, null, 2);
+        } catch (err) {
+          result.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+        }
       };
     </script>
   </body>
