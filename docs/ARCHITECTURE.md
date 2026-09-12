@@ -6,6 +6,118 @@ Status: implementation blueprint. This document describes the smallest AWS-nativ
 
 The first supported target is a simulated procurement agent. All procurement data and side effects are fixtures. No real supplier, email, or purchasing system is contacted by the MVP.
 
+---
+
+## 0. Implemented Architecture (current state)
+
+> Sections 1+ of this document are the original AWS-native blueprint. This section
+> documents what is **actually implemented and tested** in the repository today.
+
+The agent is a genuine **Strands Agent**. SENTINEL is the security control plane wrapped
+around its tool execution path.
+
+```text
+                              USER
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │    STRANDS AGENT    │
+                    │  strands.Agent      │
+                    │  @strands.tool      │
+                    │  BedrockModel       │
+                    └──────────┬──────────┘
+                               │ BeforeToolCallEvent
+                               ▼
+          ┌────────────────────────────────────────┐
+          │               SENTINEL                 │
+          │   Risk Engine      injection signals   │
+          │   Policy Engine    ALLOW/ESCALATE/BLOCK│
+          │   Permit System    tool + exact args   │
+          │   Trust Boundary   untrusted vs trusted│
+          │   Audit            run-correlated      │
+          │   Retest           replay verification │
+          └───────────────────┬────────────────────┘
+                              │
+              BLOCK/ESCALATE  │  ALLOW + ExecutionPermit
+              ◄───────────────┤
+              cancel_tool     ▼
+                    ┌─────────────────────┐
+                    │     REAL TOOLS      │
+                    │  permit validation  │
+                    │  argument validation│
+                    └──────────┬──────────┘
+                               ▼
+                    ┌─────────────────────┐
+                    │        AWS          │
+                    │  Bedrock  (model)   │
+                    │  DynamoDB (audit)   │
+                    │  Step Functions     │
+                    └─────────────────────┘
+```
+
+### 0.1 Integration seam
+
+SENTINEL attaches to Strands as a `HookProvider`. There is no fork, no monkey-patch, and
+no reimplementation of the agent framework.
+
+| Concern | Mechanism |
+|---|---|
+| Interception | `strands.hooks.BeforeToolCallEvent` |
+| Enforcement | `event.cancel_tool = "<reason>"` — the tool never runs |
+| Outcome audit | `strands.hooks.AfterToolCallEvent` |
+| Tool surface | `@strands.tool` functions with `context=True` |
+| Call correlation | `ToolContext.tool_use["toolUseId"]` |
+| Model | `strands.models.BedrockModel`, or the local `ProcurementPlannerModel` |
+
+### 0.2 Modules
+
+| Path | Role |
+|---|---|
+| `sentinel/integrations/strands_guard.py` | The hook (`SentinelToolGuard`) and the Strands tool definitions |
+| `sentinel/integrations/strands_agent.py` | Assembles the `strands.Agent` with the guard attached |
+| `sentinel/integrations/strands_models.py` | Bedrock provider + deterministic offline planner |
+| `sentinel/security/*` | Unchanged security core: risk, policy, permits, explanation |
+| `sentinel/tools/procurement.py` | Real tools; independently validate permit and arguments |
+
+### 0.3 Why the tool surface cannot be bypassed
+
+The Strands tool functions are **inert shims**. They hold no procurement capability and
+never invoke `ProcurementTools`. They can only return a result that SENTINEL already
+produced through a validated `ExecutionPermit`.
+
+Consequences:
+
+- If the guard hook never ran, there is no authorized result and the shim raises
+  `SentinelDenied`.
+- If the guard ran and refused, Strands cancels the call before the shim executes.
+- Strands' direct-tool-call API (`agent.tool.<name>(...)`) also fires
+  `BeforeToolCallEvent`, so it is gated identically. This is covered by test
+  `test_strands_direct_tool_call_cannot_bypass_the_policy_engine`.
+
+Bypass is prevented structurally rather than by a conditional that could be forgotten.
+
+### 0.4 Decision behaviour
+
+| Tool class | Decision |
+|---|---|
+| Read tools (`search_suppliers`, `get_supplier_details`, `compare_prices`) | `ALLOW` when on the allowlist |
+| Privileged side effects (`send_email`, `create_purchase_order`) | `BLOCK` at risk >= 75, otherwise `ESCALATE` |
+| Anything off the allowlist | `BLOCK` (fail closed) |
+
+Privileged side effects are never auto-executed, even with a valid approval id. Human
+sign-off is required by design.
+
+### 0.5 Model choice and reproducibility
+
+`BedrockModel` is used for real inference. `ProcurementPlannerModel` implements the same
+Strands `Model` interface and is used for CI and the offline demo, so security assertions
+are deterministic and require no credentials. Its `vulnerable=True` mode is the attack
+subject: it follows instructions embedded in supplier data, which is precisely the
+behaviour SENTINEL must contain.
+
+---
+
+
 ## 1. Architecture Decision
 
 Use one Python codebase and one deterministic orchestration workflow:
