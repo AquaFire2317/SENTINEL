@@ -392,14 +392,38 @@ class TestTrustBoundary:
         assert "approval-a" not in engine_b.issued_approvals, "Run A approvals must not leak"
 
     def test_permit_not_reusable_across_tools(self):
-        """An ExecutionPermit for send_email cannot authorize create_purchase_order."""
-        from sentinel.security.policy import ExecutionPermit
+        """A real permit captured from send_email must not authorize create_purchase_order."""
+        from sentinel.contracts.procurement import ToolCall
+        from sentinel.security.interceptor import SentinelInterceptor
+        from sentinel.security.policy import ExecutionPermit, PolicyEngine
 
-        permit = ExecutionPermit("fake-sig")
-        # Permit is just a signature wrapper — it doesn't know which tool it's for
-        # The tool.call() method verifies permit.matches matches the tool's own signature
-        # So a permit for one tool won't match another tool's signature
-        assert permit.matches == "fake-sig"
+        store = FixtureStore()
+        tools = ProcurementTools(store)
+        policy = PolicyEngine(audit=[])
+        interceptor = SentinelInterceptor(policy)
+        captured: list = []
+
+        def capture(permit=None):
+            captured.append(permit)
+
+        # Obtain a real permit by intercepting a search_suppliers call
+        interceptor(
+            ToolCall(call_id="c1", tool_name="search_suppliers",
+                     input={"query": "laptops", "max_results": 2}),
+            capture,
+        )
+        stolen_permit = captured[0]
+        assert isinstance(stolen_permit, ExecutionPermit)
+
+        # Attempt to use the stolen permit on create_purchase_order
+        with pytest.raises((PermissionError, ValueError)):
+            tools.call(
+                "create_purchase_order",
+                {"supplier_id": "sup-acme", "item_sku": "X",
+                 "quantity": 1, "unit_price": 100.0},
+                permit=stolen_permit,
+            )
+        assert store.purchase_orders == [], "No PO should be recorded"
 
     def test_send_email_to_trusted_domain_is_allowed(self):
         """Legitimate email to trusted domain works normally."""

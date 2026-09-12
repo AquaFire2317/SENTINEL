@@ -448,7 +448,7 @@ python -m sentinel.demo
 # Run purchase order fraud demo
 python scripts/run_local_demo.py poisoned_supplier_purchase_order
 
-# Run all 85 tests
+# Run all 86 tests
 python -m pytest
 
 # Check code quality
@@ -583,13 +583,18 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-85 tests passed in 0.47s
+86 tests passed in 0.81s
 
-Integration Tests (8):
+Integration Tests (9):
   test_canonical_workflow_completes_attack_fix_retest_learn         PASSED
   test_confirmed_report_becomes_regression_case                     PASSED
   test_poisoned_purchase_order_full_flow                            PASSED
   test_regression_added_when_retest_passes                          PASSED
+  test_regression_not_added_when_must_detect_false                  PASSED
+  test_regression_not_added_when_retest_fails                       PASSED
+  test_regression_not_added_when_no_dangerous_actions               PASSED
+  test_retest_attack_observed_false_for_hardened_agent              PASSED
+  test_legitimate_procurement_workflow_succeeds                     PASSED
   test_regression_not_added_when_must_detect_false                  PASSED
   test_regression_not_added_when_retest_fails                       PASSED
   test_regression_not_added_when_no_dangerous_actions               PASSED
@@ -657,4 +662,4 @@ Red-Team Tests (42):
 
 **Document prepared: September 12, 2026**  
 **SENTINEL v0.1.0 — AWS Hackathon Project**  
-**Status: Core complete, 85/85 tests passing, ready for demo**
+**Status: Core complete, 86/86 tests passing, ready for demo**

@@ -197,3 +197,104 @@ def test_retest_attack_observed_false_for_hardened_agent():
     assert report.retest.status == "PASSED"
     assert report.retest.forbidden_actions_executed == []
     assert report.retest.mitigation_effective is True
+
+
+def test_legitimate_procurement_workflow_succeeds():
+    """End-to-end: clean request -> search -> details -> compare -> valid
+    authorization -> PO gets ESCALATE (needs human approval) -> not auto-executed.
+
+    Proves SENTINEL allows legitimate reads and correctly escalates (not blocks)
+    authorized side effects for human review."""
+    from sentinel.contracts.procurement import ToolCall
+    from sentinel.contracts.security import Decision
+    from sentinel.security.interceptor import SentinelInterceptor
+    from sentinel.security.policy import PolicyEngine
+    from sentinel.tools.fixtures import FixtureStore
+    from sentinel.tools.procurement import ProcurementTools
+
+    store = FixtureStore(poisoned=False)
+    tools = ProcurementTools(store)
+    policy = PolicyEngine(audit=[], issued_approvals={"approval-legit-001"})
+    interceptor = SentinelInterceptor(policy)
+
+    # 1. Search suppliers
+    obs_search = interceptor(
+        ToolCall(call_id="s1", tool_name="search_suppliers",
+                 input={"query": "laptops", "max_results": 5}),
+        lambda permit=None: tools.call("search_suppliers",
+                                       {"query": "laptops", "max_results": 5},
+                                       permit=permit),
+    )
+    assert obs_search.executed is True
+    assert obs_search.decision == Decision.ALLOW
+    assert obs_search.result is not None
+    supplier_ids = [s["supplier_id"] for s in obs_search.result.data["suppliers"]]
+    assert len(supplier_ids) >= 1
+
+    # 2. Get supplier details
+    obs_detail = interceptor(
+        ToolCall(call_id="s2", tool_name="get_supplier_details",
+                 input={"supplier_id": supplier_ids[0]},
+                 derived_from=["s1"]),
+        lambda permit=None: tools.call("get_supplier_details",
+                                       {"supplier_id": supplier_ids[0]},
+                                       permit=permit),
+    )
+    assert obs_detail.executed is True
+    assert obs_detail.decision == Decision.ALLOW
+
+    # 3. Compare prices
+    obs_compare = interceptor(
+        ToolCall(call_id="s3", tool_name="compare_prices",
+                 input={"supplier_ids": supplier_ids, "item_sku": "LAPTOP-001",
+                        "quantity": 10},
+                 derived_from=["s1"]),
+        lambda permit=None: tools.call("compare_prices",
+                                       {"supplier_ids": supplier_ids,
+                                        "item_sku": "LAPTOP-001", "quantity": 10},
+                                       permit=permit),
+    )
+    assert obs_compare.executed is True
+    assert obs_compare.decision == Decision.ALLOW
+
+    # 4. Create purchase order with valid approval
+    # Side-effect tools always get ESCALATE (needs human approval), never auto-ALLOW.
+    # This is correct: even legitimate POs go through human review.
+    cheapest = min(obs_compare.result.data["quotes"],
+                   key=lambda q: q["unit_price"])
+    obs_po = interceptor(
+        ToolCall(call_id="s4", tool_name="create_purchase_order",
+                 input={"supplier_id": cheapest["supplier_id"],
+                        "item_sku": cheapest["item_sku"],
+                        "quantity": cheapest["quantity"],
+                        "unit_price": cheapest["unit_price"],
+                        "approval_id": "approval-legit-001"},
+                 derived_from=["s3"]),
+        lambda permit=None: tools.call("create_purchase_order",
+                                       {"supplier_id": cheapest["supplier_id"],
+                                        "item_sku": cheapest["item_sku"],
+                                        "quantity": cheapest["quantity"],
+                                        "unit_price": cheapest["unit_price"],
+                                        "approval_id": "approval-legit-001"},
+                                       permit=permit),
+    )
+    # ESCALATE, not BLOCK: the approval is valid, risk is low, but side effects
+    # require human sign-off. No permit is created, no auto-execution.
+    assert obs_po.executed is False
+    assert obs_po.decision == Decision.ESCALATE
+
+    # 5. Verify PO is NOT auto-recorded (needs human approval)
+    assert len(store.purchase_orders) == 0
+
+    # 6. Verify no BLOCK in audit for PO (ESCALATE is correct, not BLOCK)
+    po_events = [e for e in policy.audit if "create_purchase_order" in e.message]
+    assert len(po_events) >= 1
+    assert po_events[0].data.get("decision") == "ESCALATE"
+
+    # 7. Verify all read operations were ALLOW (no false blocks)
+    all_events = [e for e in policy.audit if e.event_type == "DECISION"]
+    read_events = [e for e in all_events
+                   if "search_suppliers" in e.message
+                   or "get_supplier_details" in e.message
+                   or "compare_prices" in e.message]
+    assert all(e.data.get("decision") == "ALLOW" for e in read_events)
