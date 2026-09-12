@@ -37,7 +37,7 @@ SENTINEL is an **autonomous security monitoring system for AI agents**. It watch
 
 SENTINEL is a proof-of-concept that demonstrates how to build an **immune system for AI agents** — a layer that sits between the agent and the outside world, evaluates every action the agent wants to take, and blocks the dangerous ones before they happen.
 
-**Current status:** The core system is fully functional. It has been tested against 12 different categories of attacks across 3 rounds of adversarial testing (red-teaming). All 62 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders.
+**Current status:** The core system is fully functional. It has been tested against 12 different categories of attacks across 3 rounds of adversarial testing (red-teaming), plus a focused trust/provenance boundary audit. All 85 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders.
 
 ---
 
@@ -448,7 +448,7 @@ python -m sentinel.demo
 # Run purchase order fraud demo
 python scripts/run_local_demo.py poisoned_supplier_purchase_order
 
-# Run all 62 tests
+# Run all 85 tests
 python -m pytest
 
 # Check code quality
@@ -583,7 +583,7 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-62 tests passed in 0.45s
+85 tests passed in 0.47s
 
 Integration Tests (8):
   test_canonical_workflow_completes_attack_fix_retest_learn         PASSED
@@ -595,7 +595,7 @@ Integration Tests (8):
   test_regression_not_added_when_no_dangerous_actions               PASSED
   test_retest_attack_observed_false_for_hardened_agent              PASSED
 
-Unit Tests (24):
+Unit Tests (35):
   test_package_has_version                                          PASSED
   test_settings_have_safe_local_defaults                            PASSED
   test_settings_accept_environment_aliases                          PASSED
@@ -605,10 +605,20 @@ Unit Tests (24):
   test_read_only_supplier_research_is_allowed                       PASSED
   test_explanation_uses_decision_evidence                           PASSED
   test_unknown_tool_audit_uses_security_decision_model              PASSED
+  test_risk_score_clean_call_is_zero                                PASSED
+  test_risk_score_single_injection_signal_is_medium                 PASSED
+  test_risk_score_untrusted_destination_is_critical                 PASSED
+  test_risk_score_forged_approval_beats_no_approval                 PASSED
+  test_explanation_for_block_decision                               PASSED
+  test_explanation_for_escalate_decision                            PASSED
+  test_explanation_for_allow_decision                               PASSED
   test_search_suppliers_returns_poisoned_supplier_as_untrusted_data PASSED
   test_side_effect_tools_only_record_fixture_side_effects           PASSED
+  test_send_email_rejects_untrusted_domain                          PASSED
+  test_send_email_accepts_trusted_domain                            PASSED
   test_unknown_tool_is_rejected                                     PASSED
   test_vulnerable_agent_exposes_dangerous_proposal                  PASSED
+  test_vulnerable_agent_proposes_email_before_tool_rejects          PASSED
   test_hardened_agent_does_not_follow_supplier_instruction          PASSED
   test_post_run_returns_report_and_populates_regressions            PASSED
   test_get_unknown_run_returns_not_found                            PASSED
@@ -620,7 +630,7 @@ Unit Tests (24):
   test_list_scenarios_returns_both                                  PASSED
   test_load_unknown_scenario_raises                                 PASSED
 
-Red-Team Tests (30):
+Red-Team Tests (42):
   TestA1ObfuscatedInjection (3)                                     PASSED
   TestA2DestinationManipulation (1)                                 PASSED
   TestA3ForgedApproval (1)                                          PASSED
@@ -640,10 +650,11 @@ Red-Team Tests (30):
   TestCrossToolStateLeakage (1)                                     PASSED
   TestEmailSpoofing (1)                                             PASSED
   TestContextWindowOverflow (1)                                     PASSED
+  TestTrustBoundary (11)                                            PASSED
 ```
 
 ---
 
 **Document prepared: September 12, 2026**  
 **SENTINEL v0.1.0 — AWS Hackathon Project**  
-**Status: Core complete, 62/62 tests passing, ready for demo**
+**Status: Core complete, 85/85 tests passing, ready for demo**
