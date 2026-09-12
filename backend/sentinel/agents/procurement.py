@@ -1,7 +1,7 @@
 """Deterministic procurement target agent for the MVP attack path."""
 
-from collections.abc import Callable
 import re
+from collections.abc import Callable
 
 from sentinel.contracts.procurement import ToolCall, ToolObservation, ToolResult
 from sentinel.tools.procurement import ProcurementTools

@@ -12,7 +12,6 @@ Hardening notes (red-team round 1):
 """
 
 import re
-import string
 
 from sentinel.contracts.procurement import ToolCall, ToolObservation, ToolTrust
 from sentinel.contracts.security import Evidence, RiskAssessment, RiskLevel

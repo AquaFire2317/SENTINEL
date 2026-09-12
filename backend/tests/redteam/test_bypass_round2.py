@@ -7,7 +7,8 @@ from sentinel.security.policy import PolicyEngine
 from sentinel.security.risk import TRUSTED_DOMAINS, assess_tool_call
 from sentinel.tools.fixtures import FixtureStore
 from sentinel.tools.procurement import ProcurementTools
-from backend.tests.redteam.test_attacks import run_with_note, decisions_for
+
+from backend.tests.redteam.test_attacks import decisions_for, run_with_note
 
 
 class TestBypassRound2:
@@ -42,7 +43,7 @@ class TestBypassRound2:
         interceptor = SentinelInterceptor(policy)
         call_a = ToolCall(call_id="a", tool_name="send_email",
                           input={"to": "x@corp.example", "subject": "s", "body": "b"})
-        first = interceptor(call_a, lambda p=None: None)
+        interceptor(call_a, lambda p=None: None)
         # Same logical call, keys in any order produce identical signature.
         call_b = ToolCall(call_id="b", tool_name="send_email",
                           input={"subject": "s", "body": "b", "to": "x@corp.example"})
@@ -75,7 +76,6 @@ class TestBypassRound2:
 
         def capture_execute(permit=None):
             captured.append(permit)
-            return None
 
         interceptor(ToolCall(call_id="c1", tool_name="search_suppliers",
                              input={"query": "laptops", "max_results": 2}),
