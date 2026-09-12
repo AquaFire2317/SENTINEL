@@ -32,5 +32,5 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
-      - name: Demo
-        run: python -m sentinel.demo
+      - name: Demo (Strands)
+        run: python -m sentinel.strands_demo

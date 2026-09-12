@@ -45,16 +45,6 @@ from sentinel.security.policy import PolicyEngine
 from sentinel.tools.fixtures import FixtureStore
 from sentinel.tools.procurement import ProcurementTools
 
-# Tool names exposed to the Strands model. These intentionally mirror the
-# PolicyEngine allowlist; anything else the model invents is BLOCKED upstream.
-STRANDS_TOOL_NAMES = (
-    "search_suppliers",
-    "get_supplier_details",
-    "compare_prices",
-    "create_purchase_order",
-    "send_email",
-)
-
 
 class SentinelDenied(PermissionError):
     """Raised inside a Strands tool when SENTINEL did not authorize execution."""
@@ -153,10 +143,6 @@ class SentinelToolGuard:
         return result
 
     # ------------------------------------------------------------ reporting
-
-    @property
-    def decisions(self) -> list[tuple[str, str | None]]:
-        return [(o.call.tool_name, o.decision) for o in self.observations]
 
     def executed_tools(self) -> list[str]:
         return [o.call.tool_name for o in self.observations if o.executed]
