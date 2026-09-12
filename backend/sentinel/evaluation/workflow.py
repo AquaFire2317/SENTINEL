@@ -40,7 +40,7 @@ class EvaluationWorkflow:
             None,
         )
         if block_audit is None:
-            raise RuntimeError("canonical attack did not produce a blocking decision")
+            raise RuntimeError(f"Attack scenario '{scenario.scenario_id}' did not produce a blocking decision")
         decision = block_audit["decision"]
         risk = block_audit["risk"]
         from sentinel.contracts.security import SecurityDecision
@@ -48,13 +48,16 @@ class EvaluationWorkflow:
         security_decision = SecurityDecision.model_validate(block_audit)
         mitigation = self._mitigation()
         retest = self._retest(scenario, mitigation)
+        explanation_text = explain(security_decision)
         regression_added = bool(
             scenario.must_detect
             and dangerous
             and blocked
             and retest.status == "PASSED"
         )
-        security_score = self._score(bool(dangerous), bool(blocked), retest, regression_added)
+        security_score = self._score(
+            bool(dangerous), bool(blocked), retest, regression_added, explanation_text
+        )
         return EvaluationReport(
             run_id=run_id,
             scenario_id=scenario.scenario_id,
@@ -62,7 +65,7 @@ class EvaluationWorkflow:
             risk_score=risk["score"],
             risk_level=risk["level"],
             decision=decision,
-            explanation=explain(security_decision),
+            explanation=explanation_text,
             mitigation=mitigation,
             retest=retest,
             regression_added=regression_added,
@@ -102,20 +105,24 @@ class EvaluationWorkflow:
             and event.data.get("decision") == "BLOCK"
             and any(ft in event.message for ft in scenario.forbidden_tools)
         ]
-        detected = bool(blocked_forbidden)
+        attack_observed = bool(blocked_forbidden)
         return RetestResult(
             status="PASSED" if not forbidden_executed else "FAILED",
-            detected=detected,
+            attack_observed=attack_observed,
             forbidden_actions_executed=forbidden_executed,
             mitigation_effective=not forbidden_executed,
             observations=[item.model_dump(mode="json") for item in observations],
         )
 
     @staticmethod
-    def _score(dangerous: bool, blocked: bool, retest: RetestResult, regression_added: bool) -> int:
-        # explanation_generated should reflect whether the explanation was
-        # actually produced with evidence, not be hardcoded.
-        explanation_generated = True  # always produced in current impl
+    def _score(
+        dangerous: bool,
+        blocked: bool,
+        retest: RetestResult,
+        regression_added: bool,
+        explanation_text: str = "",
+    ) -> int:
+        explanation_generated = bool(explanation_text and explanation_text.strip())
         return round(
             100
             * (

@@ -2,14 +2,23 @@
 
 Security boundary: `call()` refuses to run without an ExecutionPermit minted
 by the Sentinel PolicyEngine. Direct/deputy invocation is denied.
+
+Hardening notes (red-team round 2):
+- `send_email` validates recipient domain against TRUSTED_EMAIL_DOMAINS.
+  Emails to untrusted domains are rejected at the tool level (defense-in-depth),
+  in addition to the risk engine's DESTINATION_MISMATCH signal.
 """
 
 import math
+import re
 from typing import Any
 
 from sentinel.contracts.procurement import ToolResult, ToolTrust
 from sentinel.security.policy import ExecutionPermit, PolicyEngine
 from sentinel.tools.fixtures import FixtureStore
+
+_TRUSTED_EMAIL_DOMAINS = frozenset({"corp.example", "internal.example"})
+_EMAIL_ADDRESS = re.compile(r"[\w.+-]+@([\w-]+\.)+[\w-]{2,}")
 
 
 class ProcurementTools:
@@ -86,6 +95,15 @@ class ProcurementTools:
         body: str,
         attachments: list[str] | None = None,
     ) -> ToolResult:
+        match = _EMAIL_ADDRESS.search(to)
+        if not match:
+            raise ValueError(f"Invalid email address: {to}")
+        domain = match.group(0).split("@", 1)[1].lower()
+        if domain not in _TRUSTED_EMAIL_DOMAINS:
+            raise ValueError(
+                f"Recipient domain '{domain}' is not on the trusted list; "
+                f"allowed domains: {sorted(_TRUSTED_EMAIL_DOMAINS)}"
+            )
         message = {
             "to": to,
             "subject": subject,

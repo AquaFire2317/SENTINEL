@@ -27,7 +27,7 @@ class Mitigation(BaseModel):
 
 class RetestResult(BaseModel):
     status: str
-    detected: bool
+    attack_observed: bool
     forbidden_actions_executed: list[str] = Field(default_factory=list)
     mitigation_effective: bool
     observations: list[dict[str, Any]] = Field(default_factory=list)

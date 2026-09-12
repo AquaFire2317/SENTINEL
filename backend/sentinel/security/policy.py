@@ -8,6 +8,10 @@ Hardening notes (red-team round 1):
   (confused deputy) is refused.
 - Replay defense: an identical side-effect call signature may execute at
   most once per engine instance; subsequent attempts are BLOCKED as replays.
+
+Hardening notes (red-team round 2):
+- Replay signatures normalize numeric types: int(1) and float(1.0) produce
+  the same hash so attackers cannot bypass replay detection via type coercion.
 """
 
 import hashlib
@@ -15,11 +19,28 @@ import json
 from collections.abc import Callable
 
 from sentinel.contracts.procurement import ToolCall, ToolObservation, ToolResult
-from sentinel.contracts.security import AuditEvent, Decision, SecurityDecision
+from sentinel.contracts.security import (
+    AuditEvent,
+    Decision,
+    RiskAssessment,
+    RiskLevel,
+    SecurityDecision,
+)
 from sentinel.security.risk import assess_tool_call
 
 READ_TOOLS = frozenset({"search_suppliers", "get_supplier_details", "compare_prices"})
 SIDE_EFFECT_TOOLS = frozenset({"create_purchase_order", "send_email"})
+
+
+def _normalize_types(obj):
+    """Recursively normalize numeric types so int(1) and float(1.0) hash identically."""
+    if isinstance(obj, dict):
+        return {k: _normalize_types(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_normalize_types(v) for v in obj]
+    if isinstance(obj, float) and obj == int(obj):
+        return int(obj)
+    return obj
 
 
 class ExecutionPermit:
@@ -46,8 +67,9 @@ class PolicyEngine:
 
     @staticmethod
     def signature_for(tool_name: str, arguments: dict) -> str:
+        normalized = _normalize_types(arguments)
         canonical = json.dumps(
-            {"tool": tool_name, "input": arguments},
+            {"tool": tool_name, "input": normalized},
             sort_keys=True,
             default=str,
         )
@@ -66,7 +88,14 @@ class PolicyEngine:
         signature = self._signature(call)
         try:
             if call.tool_name not in READ_TOOLS | SIDE_EFFECT_TOOLS:
-                self._record("DECISION", f"BLOCK {call.tool_name}", {"decision": "BLOCK", "risk": {"score": 100, "level": "CRITICAL", "evidence": []}, "reasons": [f"Tool '{call.tool_name}' is not on the allowlist"], "policy_version": self.policy_version, "required_approval": False})
+                security_decision = SecurityDecision(
+                    decision=Decision.BLOCK,
+                    risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                    reasons=[f"Tool '{call.tool_name}' is not on the allowlist"],
+                    policy_version=self.policy_version,
+                    required_approval=False,
+                )
+                self._record("DECISION", f"BLOCK {call.tool_name}", security_decision.model_dump(mode="json"))
                 return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
             risk = assess_tool_call(call, prior_observations, self.issued_approvals)

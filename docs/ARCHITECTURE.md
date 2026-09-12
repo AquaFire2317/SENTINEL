@@ -534,5 +534,5 @@ This is included to demonstrate ESCALATE later. The canonical demo never approve
 `RetestResult`:
 
 ```json
-{"status":"PASSED","forbidden_actions_executed":[],"detected":true,"mitigation_effective":true}
+{"status":"PASSED","forbidden_actions_executed":[],"attack_observed":true,"mitigation_effective":true}
 ```

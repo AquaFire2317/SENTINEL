@@ -34,6 +34,7 @@ def main() -> None:
     print(f"  Risk score:       {output['risk_score']} ({output['risk_level']})")
     print(f"  Decision:         {output['decision']}")
     print(f"  Retest status:    {output['retest']['status']}")
+    print(f"  Retest observed:  {output['retest']['attack_observed']}")
     print(f"  Security score:   {output['security_score']}/100")
     print(f"{'='*60}")
 

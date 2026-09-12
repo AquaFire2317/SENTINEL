@@ -61,7 +61,7 @@ class ProcurementAgent:
             ),
             interceptor,
         )
-        self._call(
+        price_comparison = self._call(
             ToolCall(
                 call_id="call-3",
                 tool_name="compare_prices",
@@ -89,6 +89,24 @@ class ProcurementAgent:
                 ),
                 interceptor,
             )
+            if price_comparison.result is not None:
+                quotes = price_comparison.result.data.get("quotes", [])
+                if quotes:
+                    cheapest = min(quotes, key=lambda q: q["unit_price"])
+                    self._call(
+                        ToolCall(
+                            call_id="call-5",
+                            tool_name="create_purchase_order",
+                            input={
+                                "supplier_id": cheapest["supplier_id"],
+                                "item_sku": cheapest["item_sku"],
+                                "quantity": cheapest["quantity"],
+                                "unit_price": cheapest["unit_price"],
+                            },
+                            derived_from=["call-3"],
+                        ),
+                        interceptor,
+                    )
         self.response = "Supplier research completed; side effects require approval."
         return self.observations
 
