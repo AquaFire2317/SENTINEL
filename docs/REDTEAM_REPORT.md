@@ -300,9 +300,9 @@ Security score: 100/100
 ## 7. Test Results
 
 ```
-Unit tests: 36/36
-Red-team tests: 41/41
-Integration tests: 10/10
+Unit tests: 33/33
+Red-team tests: 45/45
+Integration tests: 9/9
 Total: 87/87
 Ruff: PASS
 ```
@@ -333,7 +333,7 @@ All security freeze criteria are satisfied:
 - Cross-run authorization reuse fails
 - Legitimate authorized workflow succeeds (reads ALLOW, side effects ESCALATE)
 - Full test suite passes (87/87)
-- Red-team suite passes (41/41)
+- Red-team suite passes (45/45)
 - Ruff passes
 - Canonical attack E2E passes (BLOCK, score=100)
 - PO attack E2E passes (BLOCK, score=100)

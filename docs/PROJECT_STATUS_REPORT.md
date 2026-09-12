@@ -471,7 +471,7 @@ python -m ruff check backend
     Recipient domain 'evil.example' is not on the trusted list",
   "retest": {
     "status": "PASSED",
-    "attack_observed": false,
+    "attack_observed": true,
     "mitigation_effective": true
   },
   "regression_added": true,
@@ -501,7 +501,6 @@ python -m ruff check backend
 
 | Item | Effort | Why |
 |------|--------|-----|
-| Type coercion in replay signatures | Small | int(1) vs float(1.0) produce different hashes |
 | Explanation ranking by signal strength | Small | All reasons displayed equally regardless of severity |
 | ESCALATE/ALLOW explanation variants | Small | Only BLOCK explanation is tested |
 | Behavioral monitoring | Large | No rate limiting or anomaly detection |
@@ -547,8 +546,8 @@ python -m ruff check backend
 1. **Use the deterministic demo** — it is reliable, fast, and repeatable
 2. **Show the email exfiltration scenario** — it demonstrates the full lifecycle
 3. **Show the PO scenario** — it proves multiple dangerous actions are caught
-4. **Run the test suite live** — 62 passing tests builds confidence
-5. **Highlight the red-team results** — 12 attack categories tested, all blocked
+4. **Run the test suite live** — 87 passing tests builds confidence
+5. **Highlight the red-team results** — 45 adversarial tests across 20+ attack categories, all blocked
 
 ### 11.2 For Production (Post-Hackathon)
 
@@ -583,7 +582,7 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-87 tests passed in 0.41s
+87 tests passed
 
 Integration Tests (9):
   test_canonical_workflow_completes_attack_fix_retest_learn         PASSED
@@ -593,14 +592,10 @@ Integration Tests (9):
   test_regression_not_added_when_must_detect_false                  PASSED
   test_regression_not_added_when_retest_fails                       PASSED
   test_regression_not_added_when_no_dangerous_actions               PASSED
-  test_retest_attack_observed_false_for_hardened_agent              PASSED
+  test_retest_attack_observed_via_replay_verification               PASSED
   test_legitimate_procurement_workflow_succeeds                     PASSED
-  test_regression_not_added_when_must_detect_false                  PASSED
-  test_regression_not_added_when_retest_fails                       PASSED
-  test_regression_not_added_when_no_dangerous_actions               PASSED
-  test_retest_attack_observed_false_for_hardened_agent              PASSED
 
-Unit Tests (35):
+Unit Tests (33):
   test_package_has_version                                          PASSED
   test_settings_have_safe_local_defaults                            PASSED
   test_settings_accept_environment_aliases                          PASSED
@@ -635,13 +630,13 @@ Unit Tests (35):
   test_list_scenarios_returns_both                                  PASSED
   test_load_unknown_scenario_raises                                 PASSED
 
-Red-Team Tests (42):
+Red-Team Tests (45):
   TestA1ObfuscatedInjection (3)                                     PASSED
   TestA2DestinationManipulation (1)                                 PASSED
   TestA3ForgedApproval (1)                                          PASSED
   TestA4UnauthorizedTool (1)                                        PASSED
   TestA5ConfusedDeputy (1)                                          PASSED
-  TestA6ReplayDuplicate (1)                                         PASSED
+  TestA6ReplayDuplicate (2)                                         PASSED
   TestA7MalformedInputs (3)                                         PASSED
   TestA8BlockedReadCrash (1)                                        PASSED
   TestBypassRound2 (6)                                              PASSED
@@ -649,11 +644,11 @@ Red-Team Tests (42):
   TestPriceManipulation (2)                                         PASSED
   TestSupplyChainProxyInjection (1)                                 PASSED
   TestAgentExceptionHandling (2)                                    PASSED
-  TestReplayDefenseGaps (1)                                         PASSED
+  TestReplayDefenseGaps (2)                                         PASSED
   TestRetestValidationWeakness (1)                                  PASSED
   TestScoreHardcoding (2)                                           PASSED
   TestCrossToolStateLeakage (1)                                     PASSED
-  TestEmailSpoofing (1)                                             PASSED
+  TestEmailSpoofing (2)                                             PASSED
   TestContextWindowOverflow (1)                                     PASSED
   TestTrustBoundary (11)                                            PASSED
 ```
