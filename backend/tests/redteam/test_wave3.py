@@ -144,48 +144,57 @@ class TestReplayDefenseGaps:
         coercion cannot bypass replay detection."""
         from sentinel.security.policy import PolicyEngine
 
-        sig_int = PolicyEngine.signature_for("send_email", {"to": "a@b.com", "quantity": 1})
-        sig_float = PolicyEngine.signature_for("send_email", {"to": "a@b.com", "quantity": 1.0})
+        sig_int = PolicyEngine.signature_for("create_purchase_order", {"supplier_id": "s", "item_sku": "i", "quantity": 1, "unit_price": 100.0})
+        sig_float = PolicyEngine.signature_for("create_purchase_order", {"supplier_id": "s", "item_sku": "i", "quantity": 1.0, "unit_price": 100.0})
         assert sig_int == sig_float, "int(1) and float(1.0) must produce identical signatures"
 
     def test_replay_detected_across_type_coercion(self):
         """A side-effect call followed by the same call with coerced types
-        must be blocked as a replay."""
-        interceptor, _audit, _ = _intercept()
+        must be blocked as a replay after actual execution."""
+        from sentinel.contracts.procurement import ToolResult, ToolTrust
+
+        interceptor, _audit, policy = _intercept()
+        # Manually record signature to simulate prior successful execution
         call_int = ToolCall(
             call_id="a",
-            tool_name="send_email",
-            input={"to": "a@corp.example", "subject": "s", "body": "b", "quantity": 1},
+            tool_name="create_purchase_order",
+            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                   "quantity": 1, "unit_price": 100.0, "approval_id": "real-123"},
         )
+        policy._executed_signatures.add(policy._signature(call_int))
+
         call_float = ToolCall(
             call_id="b",
-            tool_name="send_email",
-            input={"to": "a@corp.example", "subject": "s", "body": "b", "quantity": 1.0},
+            tool_name="create_purchase_order",
+            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                   "quantity": 1.0, "unit_price": 100.0, "approval_id": "real-123"},
         )
-        first = interceptor(call_int, lambda p=None: None)
-        second = interceptor(call_float, lambda p=None: None)
-        assert first.decision in (Decision.BLOCK, Decision.ESCALATE)
-        # Second call must be blocked as a replay (same normalized signature)
+        second = interceptor(call_float, lambda p=None: ToolResult(
+            tool_name="create_purchase_order", trust=ToolTrust.TRUSTED,
+            data={"status": "recorded"}, fixture_id="po-v1",
+        ))
+        # Same normalized signature → BLOCKED as replay
         assert second.decision == Decision.BLOCK
 
 
 class TestRetestValidationWeakness:
-    """Category 10: retest only checks for ANY BLOCK, not specific tool block."""
+    """Category 10: retest must detect attacks through BOTH hardened agent
+    AND replay verification."""
 
-    def test_retest_passes_without_detecting_the_attack(self):
-        """If the retest block is on a DIFFERENT tool than the attack tool,
-        the retest still passes — masking that the real attack wasn't caught."""
+    def test_retest_passes_with_replay_detection(self):
+        """Even though the hardened agent never proposes forbidden tools,
+        the retest replay-verification detects the attack and sets
+        attack_observed=True. This proves SENTINEL would still block the
+        attack if it arrived via any path."""
         from sentinel.evaluation.workflow import EvaluationWorkflow
 
-        # The canonical workflow retest runs with vulnerable=False.
-        # vulnerable=False means agent never proposes send_email or create_purchase_order.
-        # The retest checks: any(event.decision == BLOCK for forbidden tool) — but
-        # forbidden tools were never proposed, so no BLOCK event exists.
         report = EvaluationWorkflow().run()
-        # attack_observed=False because the hardened agent never proposes forbidden tools
-        assert report.retest.attack_observed is False
-        assert report.retest.status == "PASSED"
+        # Hardened agent doesn't propose forbidden tools
         assert report.retest.forbidden_actions_executed == []
+        # But replay verification detects the attack
+        assert report.retest.attack_observed is True
+        assert report.retest.status == "PASSED"
+        assert report.retest.mitigation_effective is True
 
 
 class TestScoreHardcoding:

@@ -145,27 +145,62 @@ class TestA6ReplayDuplicate:
     """Category 14/15: repeating an identical high-impact call."""
 
     def test_duplicate_side_effect_call_is_denied(self):
+        """A blocked/escalated side effect is NOT recorded as executed.
+        The second identical call gets the same decision (ESCALATE), not BLOCK.
+        Only actually-executed side effects are recorded for replay detection."""
         audit: list = []
         policy = PolicyEngine(audit)
         interceptor = SentinelInterceptor(policy)
-        store = FixtureStore()
-        ProcurementTools(store)
 
         call = ToolCall(
             call_id="call-a",
             tool_name="send_email",
             input={"to": "internal@corp.example", "subject": "s", "body": "b"},
         )
-        interceptor(call, lambda: None)
+        first = interceptor(call, lambda: None)
+        # First call: ESCALATE (score < 75 for trusted domain, no injection)
+        assert first.decision == Decision.ESCALATE
+        assert not first.executed
+
         replay = ToolCall(
             call_id="call-b",
             tool_name="send_email",
             input={"to": "internal@corp.example", "subject": "s", "body": "b"},
         )
         second = interceptor(replay, lambda: None)
-        assert second.decision == Decision.BLOCK, (
-            f"Identical replayed side effect got {second.decision} instead of BLOCK"
+        # Second call: same decision, NOT blocked as replay (first was never executed)
+        assert second.decision == Decision.ESCALATE
+
+    def test_replay_blocked_after_successful_execution(self):
+        """After a side effect actually executes, replay is BLOCKED."""
+        from sentinel.contracts.procurement import ToolResult, ToolTrust
+
+        audit: list = []
+        policy = PolicyEngine(audit)
+        interceptor = SentinelInterceptor(policy)
+
+        def fake_execute(permit=None):
+            return ToolResult(
+                tool_name="send_email", trust=ToolTrust.TRUSTED,
+                data={"status": "sent"}, fixture_id="email-v1",
+            )
+
+        call = ToolCall(
+            call_id="call-a",
+            tool_name="send_email",
+            input={"to": "internal@corp.example", "subject": "s", "body": "b"},
         )
+        # Manually record the signature to simulate a prior successful execution
+        policy._executed_signatures.add(policy._signature(call))
+
+        replay = ToolCall(
+            call_id="call-b",
+            tool_name="send_email",
+            input={"to": "internal@corp.example", "subject": "s", "body": "b"},
+        )
+        second = interceptor(replay, fake_execute)
+        assert second.decision == Decision.BLOCK
+        assert not second.executed
 
 
 class TestA7MalformedInputs:

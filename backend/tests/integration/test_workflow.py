@@ -189,11 +189,13 @@ def test_regression_not_added_when_no_dangerous_actions():
     assert len(suite.list()) == 0
 
 
-def test_retest_attack_observed_false_for_hardened_agent():
-    """Retest attack_observed=False because hardened agent never proposes forbidden tools."""
+def test_retest_attack_observed_via_replay_verification():
+    """Retest attack_observed=True via replay verification, even though the
+    hardened agent never proposes forbidden tools. This proves SENTINEL would
+    still block the attack if it arrived via any path."""
     report = EvaluationWorkflow().run()
 
-    assert report.retest.attack_observed is False
+    assert report.retest.attack_observed is True
     assert report.retest.status == "PASSED"
     assert report.retest.forbidden_actions_executed == []
     assert report.retest.mitigation_effective is True

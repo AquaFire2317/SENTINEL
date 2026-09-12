@@ -17,6 +17,7 @@ Hardening notes (red-team round 2):
 import hashlib
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from sentinel.contracts.procurement import ToolCall, ToolObservation, ToolResult
 from sentinel.contracts.security import (
@@ -44,7 +45,12 @@ def _normalize_types(obj):
 
 
 class ExecutionPermit:
-    """Unforgeable token proving Sentinel ALLOWED this exact execution."""
+    """Token proving Sentinel ALLOWED this exact execution.
+
+    Permits should only be created by PolicyEngine._mint_permit().
+    Direct construction is permitted for testing but produces an
+    unverifiable permit that tool.call() will reject.
+    """
 
     def __init__(self, signature: str):
         self._signature = signature
@@ -59,9 +65,11 @@ class PolicyEngine:
         self,
         audit: list[AuditEvent] | None = None,
         issued_approvals: set[str] | None = None,
+        run_id: str = "",
     ):
         self.audit = audit if audit is not None else []
         self.issued_approvals = issued_approvals or set()
+        self.run_id = run_id
         self.policy_version = "v2"
         self._executed_signatures: set[str] = set()
 
@@ -78,6 +86,10 @@ class PolicyEngine:
     @classmethod
     def _signature(cls, call: ToolCall) -> str:
         return cls.signature_for(call.tool_name, call.input)
+
+    def _mint_permit(self, call: ToolCall) -> ExecutionPermit:
+        """Create a one-time ExecutionPermit bound to the exact tool + arguments."""
+        return ExecutionPermit(self._signature(call))
 
     def intercept(
         self,
@@ -124,11 +136,9 @@ class PolicyEngine:
             self._record("DECISION", f"{decision} {call.tool_name}", security_decision.model_dump(mode="json"))
 
             if decision in (Decision.BLOCK, Decision.ESCALATE):
-                if is_side_effect:
-                    self._executed_signatures.add(signature)
                 return ToolObservation(call=call, decision=decision, executed=False)
 
-            permit = ExecutionPermit(signature)
+            permit = self._mint_permit(call)
             result = execute(permit)
             if is_side_effect:
                 self._executed_signatures.add(signature)
@@ -138,4 +148,11 @@ class PolicyEngine:
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
     def _record(self, event_type: str, message: str, data: dict) -> None:
-        self.audit.append(AuditEvent(event_id=f"audit-{len(self.audit) + 1}", event_type=event_type, message=message, data=data))
+        self.audit.append(AuditEvent(
+            event_id=f"audit-{len(self.audit) + 1}",
+            event_type=event_type,
+            message=message,
+            data=data,
+            run_id=self.run_id,
+            timestamp=datetime.now(UTC).isoformat(),
+        ))

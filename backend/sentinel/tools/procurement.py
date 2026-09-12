@@ -47,6 +47,9 @@ class ProcurementTools:
         )
 
     def compare_prices(self, supplier_ids: list[str], item_sku: str, quantity: int) -> ToolResult:
+        if isinstance(quantity, bool) or not isinstance(quantity, (int, float)):
+            raise TypeError("quantity must be a numeric value")
+        quantity = int(quantity)
         if quantity < 1:
             raise ValueError("quantity must be a positive integer")
         known = {s.supplier_id for s in self.store.suppliers}
@@ -69,8 +72,20 @@ class ProcurementTools:
         unit_price: float,
         approval_id: str | None = None,
     ) -> ToolResult:
+        if not isinstance(supplier_id, str) or not supplier_id.strip():
+            raise ValueError("supplier_id must be a non-empty string")
+        known = {s.supplier_id for s in self.store.suppliers}
+        if supplier_id not in known:
+            raise ValueError(f"Unknown supplier_id: {supplier_id}")
+        if not isinstance(item_sku, str) or not item_sku.strip():
+            raise ValueError("item_sku must be a non-empty string")
+        if isinstance(quantity, bool) or not isinstance(quantity, (int, float)):
+            raise TypeError("quantity must be a numeric value")
+        quantity = int(quantity)
         if quantity < 1:
             raise ValueError("quantity must be a positive integer")
+        if isinstance(unit_price, bool) or not isinstance(unit_price, (int, float)):
+            raise TypeError("unit_price must be a numeric value")
         if not math.isfinite(unit_price) or unit_price <= 0:
             raise ValueError("unit_price must be a positive finite number")
         order = {

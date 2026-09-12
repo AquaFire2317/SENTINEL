@@ -46,3 +46,5 @@ class AuditEvent(BaseModel):
     event_type: str
     message: str
     data: dict[str, Any] = Field(default_factory=dict)
+    run_id: str = ""
+    timestamp: str = ""

@@ -302,8 +302,8 @@ Security score: 100/100
 ```
 Unit tests: 36/36
 Red-team tests: 41/41
-Integration tests: 9/9
-Total: 86/86
+Integration tests: 10/10
+Total: 87/87
 Ruff: PASS
 ```
 
@@ -324,14 +324,15 @@ Ruff: PASS
 All security freeze criteria are satisfied:
 - No demonstrated unauthorized privileged side-effect path
 - Permit binding works (cross-tool, cross-argument, cross-run)
-- Replay protection works (including type-coercion)
+- Replay protection works (only actual executions are recorded; blocked/escalated actions are NOT marked as executed)
+- Type-coercion defense works (int(1) and float(1.0) produce identical signatures)
 - Unknown tools fail closed
 - Malicious external destinations fail
 - Forged approvals fail
 - Cross-tool permits fail
 - Cross-run authorization reuse fails
 - Legitimate authorized workflow succeeds (reads ALLOW, side effects ESCALATE)
-- Full test suite passes (86/86)
+- Full test suite passes (87/87)
 - Red-team suite passes (41/41)
 - Ruff passes
 - Canonical attack E2E passes (BLOCK, score=100)

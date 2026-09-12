@@ -37,18 +37,24 @@ class TestBypassRound2:
         assert blocks and blocks[0].data["decision"] == "BLOCK"
 
     def test_case_variant_replay_is_still_replay(self):
-        """Signature must not be evaded by key ordering or unimportant formatting."""
+        """Signature must not be evaded by key ordering or unimportant formatting.
+        A blocked/escalated action is NOT recorded as executed, so the second
+        call gets the same decision. Replay detection only triggers after
+        actual execution."""
         audit: list = []
         policy = PolicyEngine(audit)
         interceptor = SentinelInterceptor(policy)
         call_a = ToolCall(call_id="a", tool_name="send_email",
                           input={"to": "x@corp.example", "subject": "s", "body": "b"})
-        interceptor(call_a, lambda p=None: None)
+        first = interceptor(call_a, lambda p=None: None)
+        # First call: ESCALATE (trusted domain, no injection keywords)
+        assert first.decision == Decision.ESCALATE
         # Same logical call, keys in any order produce identical signature.
         call_b = ToolCall(call_id="b", tool_name="send_email",
                           input={"subject": "s", "body": "b", "to": "x@corp.example"})
         second = interceptor(call_b, lambda p=None: None)
-        assert second.decision == Decision.BLOCK
+        # Second call: same decision (first was never executed, so no replay block)
+        assert second.decision == Decision.ESCALATE
 
     def test_forged_approval_raises_not_lowers_risk(self):
         legit = assess_tool_call(
