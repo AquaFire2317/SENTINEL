@@ -1,14 +1,33 @@
-# SENTINEL
+<p align="center">
+  <img src="https://img.shields.io/badge/strands--agents-genuine%20integration-00c896?style=for-the-badge&logo=python&logoColor=white" alt="Strands Agents"/>
+  <img src="https://img.shields.io/badge/AWS%20Hackathon-2026-e94560?style=for-the-badge&logo=amazonaws&logoColor=white" alt="AWS Hackathon"/>
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"/>
+  <img src="https://img.shields.io/badge/python-3.11+-yellow?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"/>
+  <img src="https://img.shields.io/badge/tests-132+-00c896?style=for-the-badge" alt="132 Tests"/>
+</p>
 
-**A Strands-powered procurement agent protected by a security control plane that governs tool execution.**
+<h1 align="center">SENTINEL</h1>
 
-Built for the **AWS Agents for Humans Hackathon**.
+<p align="center">
+  <strong>Autonomous Reliability &amp; Security Engine for Strands AI Agents</strong><br/>
+  <em>Detects malicious tool-result instructions, evaluates risk, enforces execution policy,<br/>prevents unsafe side effects, and retests the agent after mitigation.</em>
+</p>
+
+<p align="center">
+  <a href="#the-problem">Problem</a> ·
+  <a href="#what-sentinel-does">Solution</a> ·
+  <a href="#role-of-strands-agents">Strands</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#setup">Setup</a> ·
+  <a href="#running-the-agent">Demo</a> ·
+  <a href="#tests">Tests</a>
+</p>
 
 ---
 
 ## The problem
 
-AI agents are given real capabilities: send email, create purchase orders, move money.
+AI agents are given real capabilities: **send email**, **create purchase orders**, **move money**.
 They also read untrusted data — supplier records, web pages, tickets, emails.
 
 An attacker who controls any of that data can write instructions *into* it:
@@ -20,6 +39,8 @@ An attacker who controls any of that data can write instructions *into* it:
 A capable agent reads that, believes it, and acts. This is **indirect prompt injection**,
 and telling the model to "be careful" does not stop it. The agent is working correctly;
 it was simply told to do the wrong thing by data it had to trust.
+
+---
 
 ## What SENTINEL does
 
@@ -47,13 +68,13 @@ ATTACK → DETECT → EXPLAIN → MITIGATE → RETEST → REGRESS
 
 ## Role of Strands Agents
 
-**Strands is the agent. SENTINEL is the control plane around it.**
+> **Strands is the agent. SENTINEL is the control plane around it.**
 
 The agent in this project is a real `strands.Agent`:
 
-- It is constructed with `strands.Agent(model=..., tools=..., hooks=...)`
-- Its tools are real `@strands.tool` functions with model-facing schemas
-- Strands' own event loop drives the multi-step reasoning: search → inspect → compare → decide
+- Constructed with `strands.Agent(model=..., tools=..., hooks=...)`
+- Tools are real `@strands.tool` functions with model-facing schemas
+- Strands' own event loop drives multi-step reasoning: search → inspect → compare → decide
 - Interception happens through Strands' official `BeforeToolCallEvent` hook
 - Refusals are returned to the model using Strands' `cancel_tool`, so the agent *sees* the
   refusal and can report it instead of silently failing
@@ -182,18 +203,27 @@ The AWS adapters accept injected clients, so they are exercised in CI without cr
 
 Requires **Python 3.11+** (developed on 3.13).
 
+<details>
+<summary><strong>Windows (PowerShell)</strong></summary>
+
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 ```
 
+</details>
+
+<details>
+<summary><strong>macOS / Linux</strong></summary>
+
 ```bash
-# macOS / Linux
 python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
+
+</details>
 
 `strands-agents` is a core dependency and is installed automatically. `boto3` arrives with it.
 
@@ -240,7 +270,7 @@ explicit approval.
 The **attack** demo shows a poisoned supplier note hijacking the agent: SENTINEL detects
 the injection and blocks both email exfiltration and fraudulent purchase order creation.
 
-Use it directly:
+### Programmatic usage
 
 ```python
 from sentinel.integrations.strands_agent import SentinelStrandsAgent
@@ -271,10 +301,16 @@ pytest backend/tests/integration/test_approval_workflow.py     # approval workfl
 python -m ruff check backend                        # lint
 ```
 
-The red-team suite covers prompt injection, keyword obfuscation, zero-width characters,
-separator splitting, homoglyph domains, external exfiltration, trusted-domain edge cases,
-forged approvals, replay, type-coercion replay, cross-tool permit reuse, cross-run state
-isolation, trust-boundary manipulation, unknown tools, malformed input, and retest integrity.
+<details>
+<summary><strong>Test coverage breakdown</strong></summary>
+
+| Suite | Tests | What it covers |
+|---|---|---|
+| **Unit** | 60+ | Policy engine, risk scoring, tools, agents, API, AWS adapters, config, scenario loader |
+| **Integration** | 10+ | Full evaluation workflow, Strands agent + SENTINEL guard, approval workflow |
+| **Red Team** | 30+ | Prompt injection, keyword obfuscation, zero-width chars, separator splitting, homoglyph domains, external exfiltration, trusted-domain edge cases, forged approvals, replay, type-coercion replay, cross-tool permit reuse, cross-run state isolation, trust-boundary manipulation, unknown tools, malformed input, retest integrity |
+
+</details>
 
 ---
 
@@ -291,6 +327,11 @@ SENTINEL/
 │   │   ├── approval/              # human approval workflow
 │   │   │   └── manager.py         #   ApprovalManager: ESCALATE → APPROVE/REJECT
 │   │   ├── security/              # risk engine, policy engine, permits, audit
+│   │   │   ├── policy.py          #   fail-closed ALLOW/ESCALATE/BLOCK + permits
+│   │   │   ├── risk.py            #   injection detection + scoring
+│   │   │   ├── interceptor.py     #   SentinelInterceptor adapter
+│   │   │   ├── explanation.py     #   human-readable risk explanations
+│   │   │   └── bedrock_guardrails.py  # Bedrock guardrails integration
 │   │   ├── tools/                 # procurement tools + fixtures
 │   │   ├── contracts/             # pydantic contracts
 │   │   ├── evaluation/            # ATTACK→REGRESS workflow, regression suite
@@ -320,6 +361,8 @@ SENTINEL/
 - **No generic prompt sanitization.** Injection text reaches the model unmodified by design;
   the defense is the execution gate, not input scrubbing.
 - **`infra/` is a skeleton.** AWS adapters are real and tested; no stack is deployed.
+
+---
 
 ## License
 
