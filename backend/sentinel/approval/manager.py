@@ -13,6 +13,7 @@ executions.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -67,6 +68,7 @@ class ApprovalManager:
         self.policy = policy
         self._pending: dict[str, ApprovalRecord] = {}
         self._records: dict[str, ApprovalRecord] = {}
+        self._lock = threading.Lock()
 
     def record_escalation(
         self,
@@ -85,13 +87,15 @@ class ApprovalManager:
             risk_level=risk.level.value if hasattr(risk.level, "value") else str(risk.level),
             reasons=reasons,
         )
-        self._pending[record.approval_id] = record
-        self._records[record.approval_id] = record
+        with self._lock:
+            self._pending[record.approval_id] = record
+            self._records[record.approval_id] = record
         return record
 
     def pending(self) -> list[ApprovalRecord]:
         """Return all pending approval records."""
-        return [r for r in self._pending.values()]
+        with self._lock:
+            return list(self._pending.values())
 
     def approve(self, approval_id: str, operator: str = "human") -> dict[str, Any] | None:
         """Approve a pending escalation.
@@ -100,16 +104,34 @@ class ApprovalManager:
         authoritative path as normal agent actions. Returns the tool result
         data on success, or None if the approval cannot be processed.
         """
-        record = self._pending.get(approval_id)
-        if record is None or record.status != ApprovalStatus.PENDING:
-            return None
+        with self._lock:
+            record = self._pending.get(approval_id)
+            if record is None or record.status != ApprovalStatus.PENDING:
+                return None
 
-        # Transition: PENDING -> APPROVED (atomic within single-threaded access)
-        record.status = ApprovalStatus.APPROVED
-        record.operator = operator
-        record.decided_at = datetime.now(UTC).isoformat()
+            if record.run_id != self.policy.run_id:
+                self.policy._record(
+                    "DECISION",
+                    f"BLOCK {record.tool_name}",
+                    {
+                        "decision": "BLOCK",
+                        "authorization_source": "CROSS_RUN_APPROVAL_REJECTED",
+                        "tool_name": record.tool_name,
+                        "approval_id": record.approval_id,
+                        "approval_run_id": record.run_id,
+                        "engine_run_id": self.policy.run_id,
+                        "policy_version": self.policy.policy_version,
+                    },
+                )
+                return None
 
-        # Build the exact ToolCall matching the original escalation.
+            # Transition: PENDING -> APPROVED. Lock held prevents a second
+            # approve() from seeing this record as PENDING.
+            record.status = ApprovalStatus.APPROVED
+            record.operator = operator
+            record.decided_at = datetime.now(UTC).isoformat()
+
+        # Release lock before executing (the tool path acquires its own locks).
         call = ToolCall(
             call_id=f"approval-{record.approval_id}",
             tool_name=record.tool_name,
@@ -117,32 +139,38 @@ class ApprovalManager:
             source="human_approval",
         )
 
-        # Execute through the authoritative PolicyEngine path.
         def execute_with_permit(permit):
             return self.tools.call(record.tool_name, record.arguments, permit=permit)
 
         observation = self.policy.execute_approved(call, execute_with_permit)
 
-        if observation.executed:
-            self._pending.pop(approval_id, None)
-            record.status = ApprovalStatus.EXECUTED
-            return observation.result.data if observation.result else None
+        with self._lock:
+            if observation.executed:
+                self._pending.pop(approval_id, None)
+                record.status = ApprovalStatus.EXECUTED
+                return observation.result.data if observation.result else None
 
-        # Execution failed (replay, validation error, etc.).
-        # Remove from pending — the record stays in _records for audit.
-        self._pending.pop(approval_id, None)
-        record.status = ApprovalStatus.PENDING
-        return None
+            # Execution failed (replay, validation error, etc.).
+            # Move to REJECTED so the zombie state is impossible: PENDING
+            # no longer exists, and the next approve()/reject() call returns
+            # None/False cleanly.
+            self._pending.pop(approval_id, None)
+            record.status = ApprovalStatus.REJECTED
+            record.operator = "system"
+            record.decided_at = datetime.now(UTC).isoformat()
+            return None
 
     def reject(self, approval_id: str, operator: str = "human") -> bool:
         """Reject a pending escalation. Returns True if found and rejected."""
-        record = self._pending.pop(approval_id, None)
-        if record is None or record.status != ApprovalStatus.PENDING:
-            return False
+        with self._lock:
+            record = self._pending.pop(approval_id, None)
+            if record is None or record.status != ApprovalStatus.PENDING:
+                return False
 
-        record.status = ApprovalStatus.REJECTED
-        record.operator = operator
-        record.decided_at = datetime.now(UTC).isoformat()
+            record.status = ApprovalStatus.REJECTED
+            record.operator = operator
+            record.decided_at = datetime.now(UTC).isoformat()
+
         self.policy._record(
             "DECISION",
             f"REJECTED {record.tool_name}",

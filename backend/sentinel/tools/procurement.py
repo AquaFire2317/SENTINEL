@@ -20,6 +20,18 @@ from sentinel.tools.fixtures import FixtureStore
 _TRUSTED_EMAIL_DOMAINS = frozenset({"corp.example", "internal.example"})
 _EMAIL_ADDRESS = re.compile(r"[\w.+-]+@([\w-]+\.)+[\w-]{2,}")
 
+# Explicit dispatch allowlist. `call()` resolves ONLY these names.
+# This is deliberately independent of the PolicyEngine allowlist: the tool
+# boundary must not become reachable for non-tool methods (e.g. bind_issuer)
+# even if a caller bypasses or misconfigures the policy layer.
+CALLABLE_TOOLS = frozenset({
+    "search_suppliers",
+    "get_supplier_details",
+    "compare_prices",
+    "create_purchase_order",
+    "send_email",
+})
+
 
 class ProcurementTools:
     """Fixture-backed procurement tools behind the SENTINEL authorization boundary.
@@ -160,9 +172,11 @@ class ProcurementTools:
         arguments: dict[str, Any],
         permit: ExecutionPermit | None = None,
     ) -> ToolResult:
-        tool = getattr(self, tool_name, None)
-        if callable(tool) is False or tool_name.startswith("_"):
+        if tool_name not in CALLABLE_TOOLS:
             raise ValueError(f"Unknown procurement tool: {tool_name}")
+        tool = getattr(self, tool_name, None)
+        if not callable(tool):
+            raise ValueError(f"Unknown procurement tool: {tool_name}")  # noqa: TRY004 - defense-in-depth
         if self.enforce_permits:
             if not isinstance(permit, ExecutionPermit):
                 raise PermissionError(
@@ -178,12 +192,12 @@ class ProcurementTools:
                     f"Execution permit for '{tool_name}' is not authenticatable: "
                     "it was not issued by a SENTINEL PolicyEngine"
                 )
-            if not issuer.verify_permit(permit, tool_name, arguments):
+            # Atomically authenticate AND burn the permit. Verifying and
+            # redeeming separately is a check-then-act race under concurrency.
+            if not issuer.consume_permit(permit, tool_name, arguments):
                 raise PermissionError(
                     f"Execution permit for '{tool_name}' is invalid: it was not "
                     "issued by this PolicyEngine, has already been used, belongs "
                     "to another run, or does not match this tool and arguments"
                 )
-            # Single-use: burn the permit before the side effect happens.
-            issuer.redeem_permit(permit)
         return tool(**arguments)

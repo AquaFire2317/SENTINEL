@@ -39,6 +39,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -87,7 +88,7 @@ class ExecutionPermit:
     and refuses it thereafter.
     """
 
-    __slots__ = ("_tool_name", "_signature", "_run_id", "_nonce", "_token", "_issuer")
+    __slots__ = ("_issuer", "_nonce", "_run_id", "_signature", "_token", "_tool_name")
 
     def __init__(
         self,
@@ -164,6 +165,11 @@ class PolicyEngine:
         # Nonces of permits that have been minted and not yet redeemed.
         # Redemption removes the nonce, making every permit single-use.
         self._live_permits: set[str] = set()
+        # Guards the check-then-act sequences that protect against duplicate
+        # side effects: replay-signature claiming and permit redemption. Without
+        # this, two threads can both pass the replay check before either records
+        # its execution, producing two real side effects from one authorization.
+        self._lock = threading.RLock()
 
     @staticmethod
     def signature_for(tool_name: str, arguments: dict) -> str:
@@ -179,6 +185,25 @@ class PolicyEngine:
     def _signature(cls, call: ToolCall) -> str:
         return cls.signature_for(call.tool_name, call.input)
 
+    def _claim_signature(self, signature: str) -> bool:
+        """Atomically claim a side-effect signature for execution.
+
+        Returns True if this caller won the claim, False if it was already
+        claimed. This closes the window between the replay check and the
+        execution record, during which a concurrent caller could otherwise
+        also pass the check and produce a second side effect.
+        """
+        with self._lock:
+            if signature in self._executed_signatures:
+                return False
+            self._executed_signatures.add(signature)
+            return True
+
+    def _release_signature(self, signature: str) -> None:
+        """Release a claimed signature after a failed execution."""
+        with self._lock:
+            self._executed_signatures.discard(signature)
+
     def _permit_token(self, signature: str, nonce: str) -> str:
         """HMAC binding a permit to this engine, this run, and these arguments."""
         message = f"{self.run_id}|{signature}|{nonce}".encode()
@@ -188,7 +213,8 @@ class PolicyEngine:
         """Create a single-use ExecutionPermit bound to tool + arguments + run."""
         signature = self._signature(call)
         nonce = secrets.token_hex(16)
-        self._live_permits.add(nonce)
+        with self._lock:
+            self._live_permits.add(nonce)
         return ExecutionPermit(
             signature=signature,
             tool_name=call.tool_name,
@@ -221,8 +247,9 @@ class PolicyEngine:
             return False
         if not permit.nonce or not permit.token:
             return False
-        if permit.nonce not in self._live_permits:
-            return False
+        with self._lock:
+            if permit.nonce not in self._live_permits:
+                return False
         if permit.run_id != self.run_id:
             return False
         if permit.tool_name != tool_name:
@@ -232,10 +259,31 @@ class PolicyEngine:
         expected = self._permit_token(permit.matches, permit.nonce)
         return hmac.compare_digest(permit.token, expected)
 
+    def consume_permit(
+        self,
+        permit: object,
+        tool_name: str,
+        arguments: dict,
+    ) -> bool:
+        """Atomically verify a permit and burn it.
+
+        This is the call the tool boundary must use. Verifying and redeeming as
+        two separate steps is a check-then-act race: two threads could both
+        verify the same permit before either redeemed it, yielding two side
+        effects from one authorization. Returns False if the permit is invalid,
+        in which case nothing is consumed and the caller must refuse.
+        """
+        with self._lock:
+            if not self.verify_permit(permit, tool_name, arguments):
+                return False
+            self._live_permits.discard(permit.nonce)  # type: ignore[union-attr]
+            return True
+
     def redeem_permit(self, permit: object) -> None:
         """Consume a permit so it can never be used again."""
         if isinstance(permit, ExecutionPermit) and permit.nonce:
-            self._live_permits.discard(permit.nonce)
+            with self._lock:
+                self._live_permits.discard(permit.nonce)
 
     def revoke_permit(self, permit: object) -> None:
         """Invalidate an unused permit (e.g. after a failed execution)."""
@@ -259,6 +307,10 @@ class PolicyEngine:
         - Risk is assessed via the detection engine
         - Replay signatures are checked
         - Decision thresholds are applied
+
+        Fail-closed: if risk assessment or signature computation raises for any
+        reason (malformed arguments, unserializable input, detector failure),
+        the result is BLOCK. Detection failure must never become permission.
         """
         if call.tool_name not in READ_TOOLS | SIDE_EFFECT_TOOLS:
             return SecurityDecision(
@@ -269,9 +321,24 @@ class PolicyEngine:
                 required_approval=False,
             )
 
-        risk = assess_tool_call(call, prior_observations, self.issued_approvals)
+        try:
+            risk = assess_tool_call(call, prior_observations, self.issued_approvals)
+            signature = self._signature(call)
+        except Exception as error:  # noqa: BLE001 - deliberate fail-closed
+            return SecurityDecision(
+                decision=Decision.BLOCK,
+                risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                reasons=[
+                    (
+                        "Security evaluation failed closed: "
+                        f"{type(error).__name__}: {error}"
+                    )
+                ],
+                policy_version=self.policy_version,
+                required_approval=False,
+            )
+
         is_side_effect = call.tool_name in SIDE_EFFECT_TOOLS
-        signature = self._signature(call)
 
         if is_side_effect and signature in self._executed_signatures:
             decision = Decision.BLOCK
@@ -327,21 +394,53 @@ class PolicyEngine:
                     call=call, decision=security_decision.decision, executed=False
                 )
 
+            is_side_effect = call.tool_name in SIDE_EFFECT_TOOLS
+            signature = self._signature(call)
+
+            # Claim the signature BEFORE executing. evaluate() already checked
+            # for replay, but between that check and here a concurrent caller
+            # could execute the same side effect. The claim is atomic, so
+            # exactly one caller proceeds.
+            if is_side_effect and not self._claim_signature(signature):
+                self._record(
+                    "DECISION",
+                    f"BLOCK {call.tool_name}",
+                    {
+                        "decision": "BLOCK",
+                        "reasons": ["Duplicate side-effect call signature; replays are denied"],
+                        "tool_name": call.tool_name,
+                        "policy_version": self.policy_version,
+                    },
+                )
+                return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
             permit = self._mint_permit(call)
             try:
                 result = execute(permit)
             except BaseException:
-                # Never leave a usable permit behind after a failed execution.
+                # Never leave a usable permit or a claimed signature behind
+                # after a failed execution.
                 self.revoke_permit(permit)
+                if is_side_effect:
+                    self._release_signature(signature)
                 raise
             self.redeem_permit(permit)
-            if call.tool_name in SIDE_EFFECT_TOOLS:
-                self._executed_signatures.add(self._signature(call))
             return ToolObservation(
                 call=call, result=result, decision=security_decision.decision, executed=True
             )
-        except (TypeError, ValueError, KeyError, RuntimeError, PermissionError) as error:
-            self._record("ERROR", "Policy evaluation failed closed", {"error": str(error)})
+        except Exception as error:  # noqa: BLE001 - deliberate fail-closed
+            # Fail closed on ANY unexpected failure, not just an expected subset.
+            # KeyboardInterrupt/SystemExit deliberately propagate (BaseException).
+            self._record(
+                "ERROR",
+                "Policy evaluation failed closed",
+                {
+                    "error": f"{type(error).__name__}: {error}",
+                    "tool_name": call.tool_name,
+                    "decision": "BLOCK",
+                    "policy_version": self.policy_version,
+                },
+            )
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
     # -------------------------------------------------------- execute_approved
@@ -393,16 +492,41 @@ class PolicyEngine:
             )
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
+        # Atomically claim the signature so two concurrent approvals of the
+        # same action cannot both execute.
+        if not self._claim_signature(signature):
+            self._record(
+                "DECISION",
+                f"BLOCK {call.tool_name}",
+                {
+                    "decision": "BLOCK",
+                    "reasons": ["Duplicate side-effect call signature; replays are denied"],
+                    "tool_name": call.tool_name,
+                    "authorization_source": "HUMAN_APPROVAL",
+                    "policy_version": self.policy_version,
+                },
+            )
+            return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
         permit = self._mint_permit(call)
         try:
             result = execute(permit)
-        except (TypeError, ValueError, KeyError, RuntimeError, PermissionError) as error:
+        except Exception as error:  # noqa: BLE001 - deliberate fail-closed
             self.revoke_permit(permit)
-            self._record("ERROR", "Approved execution failed", {"error": str(error)})
+            self._release_signature(signature)
+            self._record(
+                "ERROR",
+                "Approved execution failed",
+                {
+                    "error": f"{type(error).__name__}: {error}",
+                    "tool_name": call.tool_name,
+                    "decision": "BLOCK",
+                    "policy_version": self.policy_version,
+                },
+            )
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
         self.redeem_permit(permit)
-        self._executed_signatures.add(signature)
         self._record(
             "DECISION",
             f"APPROVED {call.tool_name}",
@@ -417,6 +541,15 @@ class PolicyEngine:
         return ToolObservation(call=call, result=result, decision=Decision.ALLOW, executed=True)
 
     # ----------------------------------------------------------------- audit
+
+    def audit_snapshot(self) -> list[AuditEvent]:
+        """Return a deep copy of the audit trail.
+
+        Prevents callers from mutating the engine's authoritative record.
+        Every element is a fresh copy — appending to the returned list or
+        modifying a returned event has no effect on the engine.
+        """
+        return [event.model_copy(deep=True) for event in self.audit]
 
     def _record(self, event_type: str, message: str, data: dict) -> None:
         self.audit.append(AuditEvent(

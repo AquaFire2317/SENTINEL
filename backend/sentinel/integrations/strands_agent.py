@@ -21,6 +21,7 @@ from uuid import uuid4
 from strands import Agent
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 
+from sentinel.approval.manager import ApprovalStatus
 from sentinel.contracts.security import AuditEvent, Decision
 from sentinel.integrations.strands_guard import build_guarded_toolset
 from sentinel.integrations.strands_models import SYSTEM_PROMPT, ProcurementPlannerModel
@@ -91,7 +92,11 @@ class SentinelStrandsAgent:
 
     @property
     def audit(self) -> list[AuditEvent]:
-        return self.guard.audit
+        """Return a deep copy of the audit trail.
+
+        Mutations to the returned list have no effect on the engine.
+        """
+        return self.guard.policy.audit_snapshot()
 
     @property
     def observations(self) -> list:
@@ -180,6 +185,7 @@ class SentinelStrandsAgent:
             if record:
                 from sentinel.contracts.procurement import ToolCall as TC
                 from sentinel.contracts.procurement import ToolObservation as TO
+
                 observation = TO(
                     call=TC(
                         call_id=f"approved-{approval_id}",
@@ -187,8 +193,12 @@ class SentinelStrandsAgent:
                         input=record.arguments,
                         source="human_approval",
                     ),
-                    executed=True,
-                    decision=Decision.ALLOW,
+                    executed=record.status == ApprovalStatus.EXECUTED,
+                    decision=(
+                        Decision.ALLOW
+                        if record.status == ApprovalStatus.EXECUTED
+                        else Decision.ESCALATE
+                    ),
                 )
                 self.guard.observations.append(observation)
         return result

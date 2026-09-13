@@ -14,13 +14,13 @@ This session:
 - Analyzed the full codebase for gaps Kimi missed
 - Launched Wave 3: 12 new tests across 8 untested attack categories
 - Found 3 real code-level issues, fixed them
-- Ran complete test suite: **169 tests passing, Ruff clean**
+- Ran complete test suite: **214 tests passing, Ruff clean**
 
 ## What I Inherited
 
 | Component | Status |
 |-----------|--------|
-| 169 tests passing | ✅ |
+| 214 tests passing | ✅ |
 | 9 Kimi findings fixed | ✅ |
 | 6 Kimi bypass tests passing | ✅ |
 | Ruff clean | ✅ |
@@ -135,7 +135,7 @@ elif not is_side_effect:
 ## Test Suite
 
 ```
-169 tests passing (34 unit + 40 approval integration + 41 strands integration + 9 workflow integration + 45 redteam)
+214 tests passing (34 unit + 45 strands integration + 9 workflow integration + 90 approval integration + 36 redteam)
 Ruff: clean
 ```
 
@@ -149,7 +149,7 @@ These are real vulnerabilities that cannot be fixed in the deterministic demo:
 
 3. **Behavioral monitoring**: No rate limiting, no anomalous-call-pattern detection, no cooldown between side-effect proposals.
 
-4. **Approval workflow**: ESCALATE decisions have no real approval mechanism. In production, ESCALATE should trigger a human approval flow (SES/SNS).
+4. **~~Approval workflow~~**: ESCALATE decisions now route through a backend ApprovalManager with thread-safe state machine, HMAC-signed permits, and authoritative PolicyEngine.execute_approved() path.
 
 5. **Cedar policy integration**: The architecture calls for AgentCore Gateway + Cedar policies as a second enforcement layer. Not implemented in the MVP.
 

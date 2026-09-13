@@ -457,7 +457,7 @@ python -m sentinel.strands_demo --bedrock
 # Run legacy evaluation workflow
 python -m sentinel.demo
 
-# Run all 169 tests
+# Run all 214 tests
 python -m pytest
 
 # Check code quality
@@ -593,7 +593,7 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-169 tests passed
+214 tests passed
 
 Integration Tests — Strands (41):
   TestStrandsWiring (4)                                              PASSED
@@ -697,4 +697,4 @@ Red-Team Tests (45):
 
 **Document prepared: September 13, 2026**  
 **SENTINEL v0.2.0 — AWS Agents for Humans Hackathon Project**  
-**Status: 169/169 tests passing, Ruff clean, ready for demo**
+**Status: 214/214 tests passing, Ruff clean, ready for demo**

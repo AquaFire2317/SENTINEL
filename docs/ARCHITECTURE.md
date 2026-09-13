@@ -213,11 +213,50 @@ This ensures:
 - Audit events are generated consistently
 - Future policy changes cannot cause enforcement drift between paths
 
-### 0.8 Honest limitations
+### 0.8 ExecutionPermit model
 
-- **Process-local state**: `_executed_signatures`, audit events, and approval records
-  are in-memory and not durable across restarts. A production deployment would need
-  durable replay protection and persistent audit storage.
+Every side-effect execution requires an `ExecutionPermit` — a single-use,
+HMAC-signed, run-bound token minted by the issuing `PolicyEngine`.
+
+```text
+ExecutionPermit
+├── signature   SHA-256(tool_name || canonicalized_arguments)
+├── tool_name   exact tool this permit authorizes
+├── run_id      the engine run that minted it
+├── nonce       unique per-permit, burned on redemption
+├── token       HMAC-SHA256(engine_secret, run_id|signature|nonce)
+└── issuer      reference to the minting PolicyEngine
+```
+
+**Why this is unforgeable without the engine secret:**
+`signature_for()` is public, so an attacker can compute `signature`. But the
+`token` requires `_permit_secret` — a 32-byte value that never leaves the
+engine. Constructing `ExecutionPermit(signature=...)` directly yields a token
+the engine will not accept.
+
+**Why permits are single-use:**
+On redemption, the engine removes the nonce from `_live_permits`. A second
+verification finds the nonce absent and returns `False`.
+
+**Why permits cannot cross tools or arguments:**
+`verify_permit()` checks that `permit.tool_name` matches the tool being
+invoked, and that `permit.matches` equals `signature_for(tool, arguments)`.
+Changing quantity from 10 to 100,000 produces a different signature.
+
+**Why permits cannot cross runs:**
+Each `PolicyEngine` instance has its own `_permit_secret`. Run A's permits
+cannot produce valid tokens for Run B's engine.
+
+**Atomic verify-and-burn:**
+`consume_permit()` verifies and redeems the permit under a single lock.
+This closes the check-then-act race where two threads could both verify
+the same permit before either redeemed it.
+
+### 0.9 Honest limitations
+
+- **Process-local state**: `_executed_signatures`, `_live_permits`, audit events,
+  and approval records are in-memory and not durable across restarts. A production
+  deployment would need durable replay protection and persistent audit storage.
 - **Demo approval identity**: `operator="human"` is a string, not an authenticated
   identity. The demo approval API models the human authorization boundary. A
   production deployment should bind `operator_id` to an authenticated identity/IAM/
@@ -228,8 +267,9 @@ This ensures:
   authorization), not detection alone. Even if detection misses a malicious
   instruction, the policy engine still enforces tool allowlists, permit requirements,
   and replay protection.
-- **Single-process concurrency**: There is no distributed locking for approval or
-  replay. In the current architecture, all state is process-local.
+- **Single-process concurrency**: Thread safety is provided for in-process concurrency
+  (locks on approval state, permit redemption, signature claiming). There is no
+  distributed locking for multi-process or multi-node deployments.
 
 ---
 

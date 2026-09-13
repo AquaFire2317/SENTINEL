@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/AWS%20Hackathon-2026-e94560?style=for-the-badge&logo=amazonaws&logoColor=white" alt="AWS Hackathon"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"/>
   <img src="https://img.shields.io/badge/python-3.11+-yellow?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"/>
-  <img src="https://img.shields.io/badge/tests-132+-00c896?style=for-the-badge" alt="132 Tests"/>
+  <img src="https://img.shields.io/badge/tests-214+-00c896?style=for-the-badge" alt="214 Tests"/>
 </p>
 
 <h1 align="center">SENTINEL</h1>
@@ -292,7 +292,7 @@ assert store.emails == []           # nothing escaped
 ## Tests
 
 ```bash
-pytest                                              # everything (169 tests)
+pytest                                              # everything (214 tests)
 pytest backend/tests/unit                           # unit
 pytest backend/tests/integration                    # integration (incl. Strands + approval)
 pytest backend/tests/redteam                        # adversarial suite
