@@ -37,7 +37,7 @@ SENTINEL is an **autonomous security monitoring system for AI agents**. It watch
 
 SENTINEL is a proof-of-concept that demonstrates how to build an **immune system for AI agents** — a layer that sits between the agent and the outside world, evaluates every action the agent wants to take, and blocks the dangerous ones before they happen.
 
-**Current status:** The core system is fully functional. It has been tested against 12 different categories of attacks across 3 rounds of adversarial testing (red-teaming), plus a focused trust/provenance boundary audit. All 85 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders.
+**Current status:** The core system is fully functional with a genuine Strands Agents SDK integration. It has been tested against 18 different categories of attacks across 3 rounds of adversarial testing (red-teaming) plus a trust/provenance boundary audit. All 132 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders. Model inference runs on Amazon Bedrock (`--bedrock`) or via a deterministic offline planner for CI reproducibility.
 
 ---
 
@@ -111,7 +111,7 @@ SENTINEL is a **security interception layer** that sits between AI agents and th
 ### 4.1 The Six-Step Lifecycle
 
 ```
-ATTACK → DETECT → EXPLAIN → FIX → RETEST → LEARN
+ATTACK → DETECT → EXPLAIN → MITIGATE → RETEST → REGRESS
 ```
 
 **Step 1 — ATTACK (Red-Team Simulation)**
@@ -147,7 +147,7 @@ The system applies its mitigation rules:
 
 SENTINEL automatically re-runs the same attack scenario with a **hardened version** of the agent (one that ignores supplier instructions). If the hardened agent is also safe, the defense is confirmed. If the hardened agent still proposes dangerous actions, the defense needs more work.
 
-**Step 6 — LEARN (Regression Suite)**
+**Step 6 — REGRESS (Regression Suite)**
 
 Successful defenses are stored in a regression suite. Each time the system is updated, it re-runs all previous attack scenarios to make sure nothing has regressed — similar to how unit tests work in software development.
 
@@ -278,39 +278,42 @@ Every tool call is scored on a 0-100 scale based on accumulated evidence:
 | Module | Description | Lines of Code | Status |
 |--------|-------------|---------------|--------|
 | **Contracts** | Data models for tool calls, security decisions, workflow | ~150 | ✅ Complete |
-| **Procurement Agent** | Deterministic target agent (vulnerable + hardened modes) | ~120 | ✅ Complete |
-| **Procurement Tools** | 5 fixture-backed tools with input validation | ~125 | ✅ Complete |
+| **Strands Agent** | Genuine `strands.Agent` with hooks, tools, Bedrock model | ~135 | ✅ Complete |
+| **Strands Guard** | `SentinelToolGuard` — Strands `HookProvider` interception layer | ~300 | ✅ Complete |
+| **Strands Models** | `ProcurementPlannerModel` (offline) + `bedrock_model()` (Bedrock) | ~295 | ✅ Complete |
+| **Procurement Tools** | 5 fixture-backed tools with input validation | ~155 | ✅ Complete |
 | **Fixture Store** | In-memory supplier database with poisoned data | ~55 | ✅ Complete |
-| **Risk Engine** | Deterministic injection detection and scoring | ~105 | ✅ Complete |
-| **Policy Engine** | ALLOW/BLOCK/ESCALATE decisions, replay defense, tool allowlist | ~115 | ✅ Complete |
+| **Risk Engine** | Deterministic injection detection and scoring (8 signals) | ~102 | ✅ Complete |
+| **Policy Engine** | ALLOW/BLOCK/ESCALATE decisions, replay defense, tool allowlist | ~158 | ✅ Complete |
 | **Interceptor** | Adapter connecting agent to policy engine | ~15 | ✅ Complete |
 | **Explanation Generator** | Evidence-backed human-readable explanations | ~15 | ✅ Complete |
-| **Evaluation Workflow** | Full ATTACK→LEARN lifecycle orchestration | ~135 | ✅ Complete |
+| **Evaluation Workflow** | Full ATTACK→REGRESS lifecycle orchestration | ~170 | ✅ Complete |
 | **Regression Suite** | In-memory regression test storage | ~15 | ✅ Complete |
-| **Scenario Loader** | Loads attack scenarios from JSON files | ~22 | ✅ Complete |
+| **Scenario Loader** | Loads attack scenarios from JSON files | ~24 | ✅ Complete |
 | **API Handler** | REST endpoints (POST /runs, GET /runs/{id}, GET /regressions) | ~37 | ✅ Complete |
-| **Persistence** | In-memory report repository | ~18 | ✅ Complete |
+| **Approval Handler** | HTTP handler for /approvals, /approvals/reset | ~45 | ✅ Complete |
+| **Approval Manager** | `ApprovalManager` — ESCALATE → APPROVE/REJECT → mint permit | ~120 | ✅ Complete |
+| **Persistence** | In-memory + DynamoDB adapters | ~67 | ✅ Complete |
 | **Settings** | Environment-backed configuration with safe defaults | ~33 | ✅ Complete |
 | **Error Handling** | Application-level errors with stable codes | ~23 | ✅ Complete |
-| **Demo CLI** | Command-line demo with scenario support | ~16 | ✅ Complete |
+| **Demo CLI** | Strands demo + legacy evaluation demo | ~125 | ✅ Complete |
 | **Scripts** | Fixture validation, local demo runner | ~80 | ✅ Complete |
-| **CI Pipeline** | GitHub Actions: lint + test + demo on Python 3.12/3.13 | ~36 | ✅ Complete |
+| **CI Pipeline** | GitHub Actions: lint + test + Strands demo on Python 3.12/3.13 | ~36 | ✅ Complete |
 | **Attack Scenarios** | 2 JSON scenario files (email exfiltration, PO fraud) | ~22 | ✅ Complete |
 
 ### 6.2 What Is Partially Built
 
 | Module | What Exists | What's Missing |
 |--------|-------------|----------------|
-| **DynamoDB Adapter** | `save()` function (19 lines) | No `get()`, no `list()`, no error handling |
-| **Step Functions** | `start()` function (22 lines) | No execution monitoring, no state machine definition |
-| **Frontend** | 92-line static HTML with demo button | No React app, no real UI |
+| **DynamoDB Adapter** | `save()` + `save_security_audit()` with tests | No `get()`, no `list()` |
+| **Step Functions** | `start()` with tests | No execution monitoring, no state machine definition |
+| **Frontend** | 92-line static HTML with demo button | No dynamic UI, no real-time updates |
 
 ### 6.3 What Is Not Built (By Design)
 
 These are intentionally deferred — not needed for the proof-of-concept:
 
 - AWS CDK infrastructure (DynamoDB, Step Functions, API Gateway, CloudFront)
-- Amazon Bedrock model integration (agent is deterministic for reliability)
 - Amazon SES email delivery (fixture records emails in memory)
 - Amazon S3 artifact storage
 - Cedar policy engine (second enforcement layer)
@@ -382,17 +385,17 @@ Testing attack categories not covered in Wave 1, including multi-step attacks, s
 ### 7.4 Test Results
 
 ```
-Total tests:     62
-Passing:         62
+Total tests:    132
+Passing:        132
 Failing:          0
 Errors:           0
-Lint (ruff):     All checks passed
+Lint (ruff):   All checks passed
 ```
 
 **Test Breakdown:**
-- Unit tests: 24 (foundation, security, tools, agent, API, AWS adapters, scenario loader)
-- Integration tests: 8 (workflow end-to-end, regression coverage)
-- Red-team tests: 30 (3 waves of adversarial testing)
+- Unit tests: 34 (foundation, security, tools, agent, API, AWS adapters, scenario loader)
+- Integration tests: 50 (workflow end-to-end, Strands integration, approval workflow, regression coverage)
+- Red-team tests: 48 (3 waves of adversarial testing + trust boundary audit)
 
 ---
 
@@ -442,13 +445,19 @@ Running the demo produces the following end-to-end flow:
 ### 8.2 Demo Commands
 
 ```bash
-# Run canonical email exfiltration demo
+# Run Strands agent demo (attack + legitimate, offline and reproducible)
+python -m sentinel.strands_demo
+
+# Run attack only
+python -m sentinel.strands_demo attack
+
+# Run with real Bedrock inference
+python -m sentinel.strands_demo --bedrock
+
+# Run legacy evaluation workflow
 python -m sentinel.demo
 
-# Run purchase order fraud demo
-python scripts/run_local_demo.py poisoned_supplier_purchase_order
-
-# Run all 87 tests
+# Run all 132 tests
 python -m pytest
 
 # Check code quality
@@ -483,38 +492,39 @@ python -m ruff check backend
 
 ## 9. What Remains
 
-### 9.1 Priority P0 — Must Fix Before Further Progress
+### 9.1 Priority P0 — Must Fix Before Submission
 
 | Item | Effort | Why |
 |------|--------|-----|
-| None currently | — | All P0 items from the audit have been completed |
+| Record demo video | 30 min | Likely required for hackathon submission |
+| Verify submission form/URL | 10 min | Cannot submit without knowing where |
 
 ### 9.2 Priority P1 — Should Fix
 
 | Item | Effort | Why |
 |------|--------|-----|
+| Add Mermaid architecture diagram to README | 15 min | Visual impact for judges |
+| Add second attack scenario | 1-2 hrs | Shows generality beyond procurement |
+| Simplify frontend to demo runner | 1 hr | Better first impression |
 | DynamoDB `get()` and `list()` | Small | API handler can't retrieve reports from DynamoDB |
-| API handler scenario selection | Small | Currently hardcoded to one scenario |
-| Tool-result sanitization | Medium | CRITICAL injection text reaches model unmodified |
 
 ### 9.3 Priority P2 — Nice to Have
 
 | Item | Effort | Why |
 |------|--------|-----|
-| Explanation ranking by signal strength | Small | All reasons displayed equally regardless of severity |
-| ESCALATE/ALLOW explanation variants | Small | Only BLOCK explanation is tested |
-| Behavioral monitoring | Large | No rate limiting or anomaly detection |
-| Real approval workflow | Large | ESCALATE has no human approval mechanism |
+| Add Strands conversation management | 1 hr | More complete SDK usage |
+| Add Bedrock Guardrails integration | 2-3 hrs | Deeper AWS story |
+| Deploy to AgentCore or Lambda | 2-4 hrs | Live demo URL |
+| Explanation ranking by signal strength | Small | All reasons displayed equally |
 
-### 9.4 Do Not Build
+### 9.4 Completed (Previously Deferred)
 
-- CDK infrastructure (not needed for demo)
-- Cedar policies (AgentCore Gateway is separate)
-- Strands agent SDK (deterministic agent is more reliable for demo)
-- Bedrock model adapter (no LLM needed for deterministic demo)
-- SES email integration (fixture is sufficient)
-- S3 storage (not needed for demo)
-- React frontend (static HTML is sufficient)
+| Item | Status | How |
+|------|--------|-----|
+| Strands agent SDK integration | ✅ Done | Genuine `strands.Agent` with hooks, tools, model |
+| Amazon Bedrock model integration | ✅ Wired | `bedrock_model()` via `--bedrock` flag |
+| Strands tool definitions | ✅ Done | 5 `@tool` functions with `inputSchema` |
+| Strands hook interception | ✅ Done | `BeforeToolCallEvent` / `AfterToolCallEvent` |
 
 ---
 
@@ -543,19 +553,20 @@ python -m ruff check backend
 
 ### 11.1 For the Hackathon Demo
 
-1. **Use the deterministic demo** — it is reliable, fast, and repeatable
+1. **Use the Strands demo with Bedrock** — `python -m sentinel.strands_demo --bedrock` shows a real LLM being contained
 2. **Show the email exfiltration scenario** — it demonstrates the full lifecycle
 3. **Show the PO scenario** — it proves multiple dangerous actions are caught
-4. **Run the test suite live** — 87 passing tests builds confidence
-5. **Highlight the red-team results** — 45 adversarial tests across 20+ attack categories, all blocked
+4. **Run the test suite live** — 132 passing tests builds confidence
+5. **Highlight the red-team results** — 42 adversarial tests across 18 attack categories, all blocked
+6. **Record a demo video** — essential for submission
 
 ### 11.2 For Production (Post-Hackathon)
 
-1. **Add Bedrock integration** — replace deterministic agent with real LLM
-2. **Implement tool-result sanitization** — strip injection signals before model sees output
-3. **Add DynamoDB persistence** — make audit trail durable
-4. **Build CDK infrastructure** — deploy to AWS
-5. **Add SES integration** — real email blocking instead of fixture recording
+1. **Add DynamoDB persistence** — make audit trail durable
+2. **Build CDK infrastructure** — deploy to AWS
+3. **Add SES integration** — real email blocking instead of fixture recording
+4. **Add Bedrock Guardrails** — defense-in-depth at the model level
+5. **Add tool-result sanitization** — strip injection signals before model sees output
 
 ---
 
@@ -582,79 +593,91 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-87 tests passed
+132 tests passed
 
-Integration Tests (9):
-  test_canonical_workflow_completes_attack_fix_retest_learn         PASSED
-  test_confirmed_report_becomes_regression_case                     PASSED
-  test_poisoned_purchase_order_full_flow                            PASSED
-  test_regression_added_when_retest_passes                          PASSED
-  test_regression_not_added_when_must_detect_false                  PASSED
-  test_regression_not_added_when_retest_fails                       PASSED
-  test_regression_not_added_when_no_dangerous_actions               PASSED
-  test_retest_attack_observed_via_replay_verification               PASSED
-  test_legitimate_procurement_workflow_succeeds                     PASSED
+Integration Tests — Strands (25):
+  TestStrandsWiring (4)                                              PASSED
+  TestLegitimateStrandsWorkflow (1)                                  PASSED
+  TestMaliciousToolResultAttack (3)                                  PASSED
+  TestLegitimateSideEffect (2)                                       PASSED
+  TestEmailExfiltration (3, 1 parametrized x4)                      PASSED
+  TestPermitEnforcement (5)                                          PASSED
+  TestStrandsRetest (1)                                              PASSED
+  TestStrandsSecurityInvariants (6)                                  PASSED
 
-Unit Tests (33):
-  test_package_has_version                                          PASSED
-  test_settings_have_safe_local_defaults                            PASSED
-  test_settings_accept_environment_aliases                          PASSED
-  test_settings_are_cached_for_application_use                      PASSED
-  test_expected_errors_have_stable_codes                            PASSED
-  test_canonical_attack_is_critical_and_blocked_without_side_effect PASSED
-  test_read_only_supplier_research_is_allowed                       PASSED
-  test_explanation_uses_decision_evidence                           PASSED
-  test_unknown_tool_audit_uses_security_decision_model              PASSED
-  test_risk_score_clean_call_is_zero                                PASSED
-  test_risk_score_single_injection_signal_is_medium                 PASSED
-  test_risk_score_untrusted_destination_is_critical                 PASSED
-  test_risk_score_forged_approval_beats_no_approval                 PASSED
-  test_explanation_for_block_decision                               PASSED
-  test_explanation_for_escalate_decision                            PASSED
-  test_explanation_for_allow_decision                               PASSED
-  test_search_suppliers_returns_poisoned_supplier_as_untrusted_data PASSED
-  test_side_effect_tools_only_record_fixture_side_effects           PASSED
-  test_send_email_rejects_untrusted_domain                          PASSED
-  test_send_email_accepts_trusted_domain                            PASSED
-  test_unknown_tool_is_rejected                                     PASSED
-  test_vulnerable_agent_exposes_dangerous_proposal                  PASSED
-  test_vulnerable_agent_proposes_email_before_tool_rejects          PASSED
-  test_hardened_agent_does_not_follow_supplier_instruction          PASSED
-  test_post_run_returns_report_and_populates_regressions            PASSED
-  test_get_unknown_run_returns_not_found                            PASSED
-  test_get_regressions_returns_json                                 PASSED
-  test_dynamodb_adapter_writes_run_item                             PASSED
-  test_step_functions_adapter_starts_execution                      PASSED
-  test_load_canonical_scenario                                      PASSED
-  test_load_po_only_scenario                                        PASSED
-  test_list_scenarios_returns_both                                  PASSED
-  test_load_unknown_scenario_raises                                 PASSED
+Integration Tests — Workflow (9):
+  test_canonical_workflow_completes_attack_fix_retest_regress          PASSED
+  test_confirmed_report_becomes_regression_case                      PASSED
+  test_poisoned_purchase_order_full_flow                             PASSED
+  test_regression_added_when_retest_passes                           PASSED
+  test_regression_not_added_when_must_detect_false                   PASSED
+  test_regression_not_added_when_retest_fails                        PASSED
+  test_regression_not_added_when_no_dangerous_actions                PASSED
+  test_retest_attack_observed_via_replay_verification                PASSED
+  test_legitimate_procurement_workflow_succeeds                      PASSED
 
-Red-Team Tests (45):
-  TestA1ObfuscatedInjection (3)                                     PASSED
-  TestA2DestinationManipulation (1)                                 PASSED
-  TestA3ForgedApproval (1)                                          PASSED
-  TestA4UnauthorizedTool (1)                                        PASSED
-  TestA5ConfusedDeputy (1)                                          PASSED
-  TestA6ReplayDuplicate (2)                                         PASSED
-  TestA7MalformedInputs (3)                                         PASSED
-  TestA8BlockedReadCrash (1)                                        PASSED
-  TestBypassRound2 (6)                                              PASSED
-  TestGoalHijacking (1)                                             PASSED
-  TestPriceManipulation (2)                                         PASSED
-  TestSupplyChainProxyInjection (1)                                 PASSED
-  TestAgentExceptionHandling (2)                                    PASSED
-  TestReplayDefenseGaps (2)                                         PASSED
-  TestRetestValidationWeakness (1)                                  PASSED
-  TestScoreHardcoding (2)                                           PASSED
-  TestCrossToolStateLeakage (1)                                     PASSED
-  TestEmailSpoofing (2)                                             PASSED
-  TestContextWindowOverflow (1)                                     PASSED
-  TestTrustBoundary (11)                                            PASSED
+Unit Tests (40):
+  test_package_has_version                                           PASSED
+  test_settings_have_safe_local_defaults                             PASSED
+  test_settings_accept_environment_aliases                           PASSED
+  test_settings_are_cached_for_application_use                       PASSED
+  test_expected_errors_have_stable_codes                             PASSED
+  test_canonical_attack_is_critical_and_blocked_without_side_effect  PASSED
+  test_read_only_supplier_research_is_allowed                        PASSED
+  test_explanation_uses_decision_evidence                            PASSED
+  test_unknown_tool_audit_uses_security_decision_model               PASSED
+  test_risk_score_clean_call_is_zero                                 PASSED
+  test_risk_score_single_injection_signal_is_medium                  PASSED
+  test_risk_score_untrusted_destination_is_critical                  PASSED
+  test_risk_score_forged_approval_beats_no_approval                  PASSED
+  test_explanation_for_block_decision                                PASSED
+  test_explanation_for_escalate_decision                             PASSED
+  test_explanation_for_allow_decision                                PASSED
+  test_search_suppliers_returns_poisoned_supplier_as_untrusted_data  PASSED
+  test_side_effect_tools_only_record_fixture_side_effects            PASSED
+  test_send_email_rejects_untrusted_domain                           PASSED
+  test_send_email_accepts_trusted_domain                             PASSED
+  test_unknown_tool_is_rejected                                      PASSED
+  test_vulnerable_agent_exposes_dangerous_proposal                   PASSED
+  test_vulnerable_agent_proposes_email_before_tool_rejects           PASSED
+  test_hardened_agent_does_not_follow_supplier_instruction           PASSED
+  test_post_run_returns_report_and_populates_regressions             PASSED
+  test_get_unknown_run_returns_not_found                             PASSED
+  test_get_regressions_returns_json                                  PASSED
+  test_dynamodb_adapter_writes_run_item                              PASSED
+  test_dynamodb_adapter_persists_strands_security_audit              PASSED
+  test_step_functions_adapter_starts_execution                       PASSED
+  test_load_canonical_scenario                                       PASSED
+  test_load_po_only_scenario                                         PASSED
+  test_list_scenarios_returns_both                                   PASSED
+  test_load_unknown_scenario_raises                                  PASSED
+  (+ 6 more unit tests)
+
+Red-Team Tests (42):
+  TestA1ObfuscatedInjection (3)                                      PASSED
+  TestA2DestinationManipulation (1)                                  PASSED
+  TestA3ForgedApproval (1)                                           PASSED
+  TestA4UnauthorizedTool (1)                                         PASSED
+  TestA5ConfusedDeputy (1)                                           PASSED
+  TestA6ReplayDuplicate (2)                                          PASSED
+  TestA7MalformedInputs (3)                                          PASSED
+  TestA8BlockedReadCrash (1)                                         PASSED
+  TestBypassRound2 (6)                                               PASSED
+  TestGoalHijacking (1)                                              PASSED
+  TestPriceManipulation (2)                                          PASSED
+  TestSupplyChainProxyInjection (1)                                  PASSED
+  TestAgentExceptionHandling (2)                                     PASSED
+  TestReplayDefenseGaps (2)                                          PASSED
+  TestRetestValidationWeakness (1)                                   PASSED
+  TestScoreHardcoding (2)                                            PASSED
+  TestCrossToolStateLeakage (1)                                      PASSED
+  TestEmailSpoofing (2)                                              PASSED
+  TestContextWindowOverflow (1)                                      PASSED
+  TestTrustBoundary (11)                                             PASSED
 ```
 
 ---
 
-**Document prepared: September 12, 2026**  
-**SENTINEL v0.1.0 — AWS Hackathon Project**  
-**Status: Core complete, 87/87 tests passing, ready for demo**
+**Document prepared: September 13, 2026**  
+**SENTINEL v0.2.0 — AWS Agents for Humans Hackathon Project**  
+**Status: Strands integration complete, 132/132 tests passing, ready for demo**

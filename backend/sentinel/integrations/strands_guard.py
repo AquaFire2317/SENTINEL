@@ -34,6 +34,7 @@ from typing import Any
 from strands import ToolContext, tool
 from strands.hooks import AfterToolCallEvent, BeforeToolCallEvent, HookRegistry
 
+from sentinel.approval.manager import ApprovalManager
 from sentinel.contracts.procurement import (
     ToolCall,
     ToolObservation,
@@ -68,6 +69,7 @@ class SentinelToolGuard:
         self.audit: list[AuditEvent] = [] if policy is None else policy.audit
         self.policy = policy or PolicyEngine(self.audit, run_id=run_id)
         self.observations: list[ToolObservation] = []
+        self.approval_manager = ApprovalManager(tools, self.policy)
         # toolUseId -> result SENTINEL authorized and executed
         self._authorized: dict[str, ToolResult] = {}
         # toolUseId -> human-readable refusal reason
@@ -81,7 +83,12 @@ class SentinelToolGuard:
         registry.add_callback(AfterToolCallEvent, self.after_tool_call)
 
     def before_tool_call(self, event: BeforeToolCallEvent) -> None:
-        """Evaluate and enforce the SENTINEL decision for one Strands tool call."""
+        """Evaluate and enforce the SENTINEL decision for one Strands tool call.
+
+        For ALLOW decisions the tool is executed immediately.
+        For BLOCK/ESCALATE decisions the tool is cancelled and (for ESCALATE)
+        the call is recorded for the human approval workflow.
+        """
         tool_use = event.tool_use
         tool_use_id = str(tool_use.get("toolUseId", ""))
         tool_name = str(tool_use.get("name", ""))
@@ -95,24 +102,31 @@ class SentinelToolGuard:
             derived_from=self._untrusted_provenance(),
         )
 
-        # PolicyEngine remains authoritative: it scores risk, decides, mints the
-        # permit, and only then invokes the real tool.
-        observation = self.policy.intercept(
-            call,
-            lambda permit=None: self.tools.call(tool_name, arguments, permit=permit),
-            self.observations,
-        )
+        # Evaluate through the PolicyEngine (risk scoring + decision).
+        observation = self._evaluate_only(call)
         self.observations.append(observation)
 
-        if observation.executed and observation.result is not None:
-            self._authorized[tool_use_id] = observation.result
+        if observation.decision == Decision.ALLOW:
+            # Mint a permit and execute immediately.
+            permit = self.policy._mint_permit(call)
+            result = self.tools.call(tool_name, arguments, permit=permit)
+            observation.result = result
+            observation.executed = True
+            self._authorized[tool_use_id] = result
             return
 
+        # BLOCK or ESCALATE: cancel the tool so Strands never executes it.
         reason = _refusal_text(observation)
         self._refused[tool_use_id] = reason
-        # Strands turns this into an error tool result: the tool never executes
-        # and the model is told why.
         event.cancel_tool = reason
+
+        # For ESCALATE, record the call for the human approval workflow.
+        if observation.decision == Decision.ESCALATE:
+            self.approval_manager.record_escalation(
+                call=call,
+                risk=self._last_risk,
+                reasons=self._last_reasons,
+            )
 
     def after_tool_call(self, event: AfterToolCallEvent) -> None:
         """Record the Strands-side outcome for audit traceability."""
@@ -127,6 +141,66 @@ class SentinelToolGuard:
                 "cancelled": bool(event.cancel_message),
             },
         )
+
+    # ------------------------------------------------------- evaluation
+
+    def _evaluate_only(self, call: ToolCall) -> ToolObservation:
+        """Evaluate a tool call through risk scoring and policy, but do NOT execute.
+
+        Returns a ToolObservation with the decision populated. For BLOCK/ESCALATE
+        the result is None and executed is False. For ALLOW the result is also
+        None (caller must execute separately).
+        """
+        from sentinel.contracts.security import RiskAssessment, RiskLevel, SecurityDecision
+        from sentinel.security.risk import assess_tool_call
+
+        risk = assess_tool_call(call, self.observations, self.policy.issued_approvals)
+        self._last_risk = risk
+
+        READ_TOOLS = frozenset({"search_suppliers", "get_supplier_details", "compare_prices"})
+        SIDE_EFFECT_TOOLS = frozenset({"create_purchase_order", "send_email"})
+        ALL_TOOLS = READ_TOOLS | SIDE_EFFECT_TOOLS
+
+        if call.tool_name not in ALL_TOOLS:
+            security_decision = SecurityDecision(
+                decision=Decision.BLOCK,
+                risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                reasons=[f"Tool '{call.tool_name}' is not on the allowlist"],
+                policy_version=self.policy.policy_version,
+                required_approval=False,
+            )
+            self.policy._record("DECISION", f"BLOCK {call.tool_name}", security_decision.model_dump(mode="json"))
+            self._last_reasons = security_decision.reasons
+            return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
+        is_side_effect = call.tool_name in SIDE_EFFECT_TOOLS
+        signature = PolicyEngine.signature_for(call.tool_name, call.input)
+
+        if is_side_effect and signature in self.policy._executed_signatures:
+            decision = Decision.BLOCK
+            reasons = ["Duplicate side-effect call signature; replays are denied"]
+        elif not is_side_effect:
+            decision = Decision.ALLOW
+            reasons = [item.text for item in risk.evidence]
+        elif risk.score >= 75:
+            decision = Decision.BLOCK
+            reasons = [item.text for item in risk.evidence]
+        else:
+            decision = Decision.ESCALATE
+            reasons = [item.text for item in risk.evidence] or [
+                f"{call.tool_name} is a side-effecting tool and requires approval"
+            ]
+
+        self._last_reasons = reasons
+        security_decision = SecurityDecision(
+            decision=decision,
+            risk=risk,
+            reasons=reasons,
+            policy_version=self.policy.policy_version,
+            required_approval=decision == Decision.ESCALATE,
+        )
+        self.policy._record("DECISION", f"{decision} {call.tool_name}", security_decision.model_dump(mode="json"))
+        return ToolObservation(call=call, decision=decision, executed=False)
 
     # ------------------------------------------------------- shim accessors
 

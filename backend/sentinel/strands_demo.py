@@ -1,13 +1,14 @@
 """End-to-end demo of the SENTINEL-protected Strands agent.
 
-    python -m sentinel.strands_demo              # attack + legitimate run (offline)
+    python -m sentinel.strands_demo              # attack + legitimate (offline)
     python -m sentinel.strands_demo attack       # attack only
-    python -m sentinel.strands_demo legitimate   # legitimate only
+    python -m sentinel.strands_demo legitimate   # legitimate with approval
     python -m sentinel.strands_demo --bedrock    # use Amazon Bedrock for inference
 
-Offline runs use the deterministic planner model so the demo is reproducible
-without AWS credentials. ``--bedrock`` swaps in ``strands.models.BedrockModel``;
-the security path is identical either way.
+Two demo paths demonstrate SENTINEL's core value proposition:
+
+  PATH A (Legitimate): Clean supplier data → research → approve PO → execute
+  PATH B (Attack): Poisoned supplier data → agent hijacked → SENTINEL blocks all
 """
 
 from __future__ import annotations
@@ -72,15 +73,47 @@ def run_attack(use_bedrock: bool = False) -> SentinelStrandsAgent:
 
 
 def run_legitimate(use_bedrock: bool = False) -> SentinelStrandsAgent:
-    """A clean request must complete without false positives."""
+    """A clean request completes with human approval for the purchase order."""
     store = FixtureStore(poisoned=False)
     agent = SentinelStrandsAgent(
         model=_build_model(use_bedrock, vulnerable=False), store=store
     )
     response = agent.run(REQUEST)
     _report("SCENARIO 2 - LEGITIMATE: clean supplier data", agent, store, response)
+
+    # The agent recommends but does not auto-execute the PO.
+    # Demonstrate the human approval workflow.
+    pending = agent.pending_approvals()
+    if pending:
+        print(f"\n{'─' * 74}")
+        print("HUMAN APPROVAL WORKFLOW")
+        print(f"{'─' * 74}")
+        for p in pending:
+            args = p["arguments"]
+            total = args.get("quantity", 0) * args.get("unit_price", 0)
+            print("\n  ACTION REQUIRES APPROVAL:")
+            print(f"    Tool:     {p['tool_name']}")
+            print(f"    Supplier: {args.get('supplier_id', 'N/A')}")
+            print(f"    Item:     {args.get('item_sku', 'N/A')}")
+            print(f"    Quantity: {args.get('quantity', 'N/A')}")
+            print(f"    Price:    ${args.get('unit_price', 0):.2f}/unit")
+            print(f"    Total:    ${total:.2f}")
+            print(f"    Risk:     {p['risk_score']}/100 ({p['risk_level']})")
+            print(f"    Reason:   {'; '.join(p['reasons'])}")
+
+            # Auto-approve for the demo
+            result = agent.approve(p["approval_id"])
+            if result:
+                print(f"\n  ✓ APPROVED — {p['tool_name']} executed successfully")
+                print(f"    Result: {result}")
+            else:
+                print(f"\n  ✗ REJECTED — {p['tool_name']} was not executed")
+
+    print("\n  Side effects after approval:")
+    print(f"    emails sent     : {len(store.emails)}")
+    print(f"    purchase orders : {len(store.purchase_orders)}")
     assert agent.blocked_tools() == [], "FALSE POSITIVE: legitimate research was blocked"
-    print("\n  RESULT: legitimate research completed with no false positives.")
+    print("\n  RESULT: legitimate procurement completed with human approval.")
     return agent
 
 
@@ -91,8 +124,9 @@ def main() -> None:
     scenario = args[0] if args else "all"
 
     print(_RULE)
-    print("SENTINEL - security layer for Strands Agents")
+    print("SENTINEL - security control plane for Strands Agents")
     print(f"{_RULE}\nStrands Agent -> SENTINEL (risk -> policy -> permit) -> real tools")
+    print("Human approval workflow: ESCALATE -> APPROVE/REJECT -> execute/deny\n")
 
     if scenario in ("all", "attack"):
         run_attack(use_bedrock)

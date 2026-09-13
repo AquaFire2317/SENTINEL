@@ -1,4 +1,4 @@
-"""Local implementation of the ATTACK through LEARN workflow."""
+"""Local implementation of the ATTACK through REGRESS workflow."""
 
 from uuid import uuid4
 

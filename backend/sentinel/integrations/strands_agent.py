@@ -19,12 +19,15 @@ from typing import Any
 from uuid import uuid4
 
 from strands import Agent
+from strands.agent.conversation_manager import SlidingWindowConversationManager
 
 from sentinel.contracts.security import AuditEvent, Decision
 from sentinel.integrations.strands_guard import build_guarded_toolset
 from sentinel.integrations.strands_models import SYSTEM_PROMPT, ProcurementPlannerModel
 from sentinel.security.policy import PolicyEngine
 from sentinel.tools.fixtures import FixtureStore
+
+DEFAULT_WINDOW_SIZE = 20
 
 
 class SentinelStrandsAgent:
@@ -40,6 +43,9 @@ class SentinelStrandsAgent:
         vulnerable: Only used when building the default local planner.
         run_id: Correlation id stamped onto every audit event.
         system_prompt: Override the default procurement system prompt.
+        window_size: Maximum number of message pairs to retain in conversation
+            history. Defaults to ``DEFAULT_WINDOW_SIZE`` (20). Pass ``None`` to
+            disable sliding-window management.
     """
 
     def __init__(
@@ -50,18 +56,27 @@ class SentinelStrandsAgent:
         vulnerable: bool = False,
         run_id: str | None = None,
         system_prompt: str | None = None,
+        window_size: int | None = DEFAULT_WINDOW_SIZE,
     ):
         self.run_id = run_id or f"strands-{uuid4().hex[:12]}"
         self.guard, tools = build_guarded_toolset(
             store=store, policy=policy, run_id=self.run_id
         )
         self.model = model if model is not None else ProcurementPlannerModel(vulnerable=vulnerable)
+
+        conversation_manager = (
+            SlidingWindowConversationManager(window_size=window_size)
+            if window_size is not None
+            else None
+        )
+
         self.agent = Agent(
             model=self.model,
             tools=tools,
             hooks=[self.guard],
             system_prompt=system_prompt or SYSTEM_PROMPT,
             callback_handler=None,
+            conversation_manager=conversation_manager,
             name="sentinel-procurement-agent",
             description="Procurement research agent protected by SENTINEL",
         )
@@ -133,3 +148,49 @@ class SentinelStrandsAgent:
             if observation.call.tool_name in ("send_email", "create_purchase_order")
             and observation.decision in (Decision.BLOCK, Decision.ESCALATE)
         ]
+
+    # --------------------------------------------------------- approval workflow
+
+    def pending_approvals(self) -> list[dict[str, Any]]:
+        """Return pending ESCALATE decisions awaiting human approval."""
+        records = self.guard.approval_manager.pending()
+        return [
+            {
+                "approval_id": r.approval_id,
+                "tool_name": r.tool_name,
+                "arguments": r.arguments,
+                "risk_score": r.risk_score,
+                "risk_level": r.risk_level,
+                "reasons": r.reasons,
+                "created_at": r.created_at,
+            }
+            for r in records
+        ]
+
+    def approve(self, approval_id: str, operator: str = "human") -> dict[str, Any] | None:
+        """Approve a pending escalation. Executes the tool through the security boundary.
+
+        Returns the tool result data on success, or None if not found/not pending.
+        """
+        result = self.guard.approval_manager.approve(approval_id, operator)
+        if result is not None:
+            record = self.guard.approval_manager.get_record(approval_id)
+            if record:
+                from sentinel.contracts.procurement import ToolCall as TC
+                from sentinel.contracts.procurement import ToolObservation as TO
+                observation = TO(
+                    call=TC(
+                        call_id=f"approved-{approval_id}",
+                        tool_name=record.tool_name,
+                        input=record.arguments,
+                        source="human_approval",
+                    ),
+                    executed=True,
+                    decision=Decision.ALLOW,
+                )
+                self.guard.observations.append(observation)
+        return result
+
+    def reject(self, approval_id: str, operator: str = "human") -> bool:
+        """Reject a pending escalation. The tool is not executed."""
+        return self.guard.approval_manager.reject(approval_id, operator)

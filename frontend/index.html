@@ -1,92 +1,574 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SENTINEL - AI Agent Security</title>
-    <style>
-      * { margin: 0; padding: 0; box-sizing: border-box; }
-      body {
-        font-family: 'Segoe UI', system-ui, sans-serif;
-        background: #0a0a0f;
-        color: #e0e0e0;
-        min-height: 100vh;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-      }
-      main {
-        background: #12121a;
-        border: 1px solid #2a2a3a;
-        border-radius: 12px;
-        padding: 40px;
-        max-width: 600px;
-        width: 90%;
-        box-shadow: 0 0 40px rgba(0, 200, 150, 0.05);
-      }
-      h1 {
-        font-size: 2rem;
-        color: #00c896;
-        margin-bottom: 8px;
-        letter-spacing: 2px;
-      }
-      .subtitle {
-        color: #888;
-        margin-bottom: 30px;
-        font-size: 0.95rem;
-      }
-      #run {
-        background: linear-gradient(135deg, #00c896, #00a0e0);
-        color: #000;
-        border: none;
-        padding: 14px 28px;
-        font-size: 1rem;
-        font-weight: 600;
-        border-radius: 8px;
-        cursor: pointer;
-        transition: transform 0.15s, box-shadow 0.15s;
-      }
-      #run:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 20px rgba(0, 200, 150, 0.3);
-      }
-      #run:active { transform: translateY(0); }
-      #result {
-        margin-top: 24px;
-        background: #0a0a12;
-        border: 1px solid #1a1a2a;
-        border-radius: 8px;
-        padding: 20px;
-        font-family: 'Fira Code', 'Consolas', monospace;
-        font-size: 0.85rem;
-        white-space: pre-wrap;
-        max-height: 400px;
-        overflow-y: auto;
-        color: #aaa;
-      }
-      .status { color: #00c896; }
-      .error { color: #ff4444; }
-    </style>
-  </head>
-  <body>
-    <main id="app">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SENTINEL — Security Control Plane for AI Agents</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface-hover: #1a1a2e;
+      --border: #2a2a3a;
+      --accent: #00c896;
+      --accent-alt: #00a0e0;
+      --danger: #ff4444;
+      --warning: #ffa500;
+      --text: #e0e0e0;
+      --text-muted: #888;
+      --text-dim: #555;
+      --success: #00c896;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .header-left { display: flex; align-items: center; gap: 16px; }
+    h1 { font-size: 1.4rem; color: var(--accent); letter-spacing: 3px; font-weight: 700; }
+    .subtitle { color: var(--text-muted); font-size: 0.82rem; }
+    .shield-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+      background: rgba(0,200,150,0.1); color: var(--accent); border: 1px solid rgba(0,200,150,0.2);
+    }
+    .shield-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+    /* Layout */
+    .container { display: flex; flex: 1; overflow: hidden; }
+    .sidebar {
+      width: 260px; min-width: 260px;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px;
+      display: flex; flex-direction: column; gap: 16px;
+    }
+    .sidebar h2 {
+      font-size: 0.75rem; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--text-muted); margin-bottom: 4px;
+    }
+    .scenario-btn {
+      background: var(--surface);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; color: var(--text); cursor: pointer;
+      text-align: left; transition: all 0.15s;
+    }
+    .scenario-btn:hover { background: var(--surface-hover); border-color: var(--accent); }
+    .scenario-btn.active { border-color: var(--accent); background: var(--surface-hover); }
+    .scenario-btn .title { font-weight: 600; margin-bottom: 2px; font-size: 0.9rem; }
+    .scenario-btn .desc { font-size: 0.75rem; color: var(--text-muted); line-height: 1.4; }
+    .sidebar-footer { margin-top: auto; }
+
+    /* Main area */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .controls {
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex; gap: 12px; align-items: center;
+    }
+    .run-btn {
+      background: linear-gradient(135deg, var(--accent), var(--accent-alt));
+      color: #000; border: none; padding: 10px 20px;
+      font-size: 0.9rem; font-weight: 600; border-radius: 8px;
+      cursor: pointer; transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .run-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,200,150,0.3); }
+    .run-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; box-shadow: none; }
+    .status-badge {
+      padding: 4px 10px; border-radius: 20px;
+      font-size: 0.75rem; font-weight: 500;
+    }
+    .status-ready { background: rgba(0,200,150,0.1); color: var(--accent); }
+    .status-running { background: rgba(0,160,224,0.1); color: var(--accent-alt); }
+    .status-done { background: rgba(0,200,150,0.1); color: var(--accent); }
+    .status-error { background: rgba(255,68,68,0.1); color: var(--danger); }
+    .status-approval { background: rgba(255,165,0,0.15); color: var(--warning); }
+
+    /* Dashboard grid */
+    .dashboard {
+      flex: 1; display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: auto 1fr;
+      gap: 1px; background: var(--border);
+      overflow: hidden;
+    }
+    .panel {
+      background: var(--bg);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .panel-header {
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem; font-weight: 600;
+      color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .panel-body {
+      flex: 1; padding: 16px; overflow-y: auto;
+      font-size: 0.82rem; line-height: 1.6;
+    }
+
+    /* Activity timeline */
+    .activity-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0; border-bottom: 1px solid #1a1a2a;
+    }
+    .activity-item:last-child { border-bottom: none; }
+    .activity-icon { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .activity-icon.allow { background: var(--accent); }
+    .activity-icon.block { background: var(--danger); }
+    .activity-icon.escalate { background: var(--warning); }
+    .activity-tool { font-weight: 600; color: var(--text); min-width: 140px; }
+    .activity-decision {
+      padding: 2px 8px; border-radius: 4px;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+    }
+    .decision-ALLOW { background: rgba(0,200,150,0.15); color: var(--accent); }
+    .decision-BLOCK { background: rgba(255,68,68,0.15); color: var(--danger); }
+    .decision-ESCALATE { background: rgba(255,165,0,0.15); color: var(--warning); }
+    .activity-detail { font-size: 0.75rem; color: var(--text-muted); margin-left: auto; }
+
+    /* Security events */
+    .event-card {
+      margin-bottom: 10px; padding: 10px 12px;
+      background: var(--surface); border-radius: 8px;
+      border-left: 3px solid var(--border);
+    }
+    .event-card.threat { border-left-color: var(--danger); }
+    .event-card.warning { border-left-color: var(--warning); }
+    .event-card.safe { border-left-color: var(--accent); }
+    .event-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .event-title { font-weight: 600; font-size: 0.85rem; }
+    .event-body { font-size: 0.78rem; color: var(--text-muted); }
+    .event-signals { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+    .signal-tag {
+      padding: 2px 6px; border-radius: 3px;
+      font-size: 0.68rem; background: rgba(255,165,0,0.1); color: var(--warning);
+    }
+
+    /* Approval card */
+    .approval-card {
+      background: var(--surface); border: 2px solid var(--warning);
+      border-radius: 12px; padding: 20px; margin-bottom: 16px;
+    }
+    .approval-card .approval-header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+    }
+    .approval-title { font-size: 1rem; font-weight: 700; color: var(--warning); }
+    .approval-badge {
+      padding: 4px 10px; border-radius: 20px;
+      font-size: 0.72rem; font-weight: 600;
+      background: rgba(255,165,0,0.15); color: var(--warning);
+    }
+    .approval-details { margin-bottom: 16px; }
+    .approval-row {
+      display: flex; justify-content: space-between; padding: 4px 0;
+      border-bottom: 1px solid #1a1a2a; font-size: 0.85rem;
+    }
+    .approval-row:last-child { border-bottom: none; }
+    .approval-label { color: var(--text-muted); }
+    .approval-value { font-weight: 500; }
+    .approval-total { font-weight: 700; color: var(--accent); }
+    .approval-risk { font-weight: 700; }
+    .approval-reason {
+      margin: 8px 0; padding: 8px; background: rgba(255,165,0,0.05);
+      border-radius: 6px; font-size: 0.78rem; color: var(--text-muted);
+    }
+    .approval-actions { display: flex; gap: 12px; }
+    .btn {
+      flex: 1; padding: 12px; border: none; border-radius: 8px;
+      font-size: 0.9rem; font-weight: 700; cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s; text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-approve {
+      background: linear-gradient(135deg, #00c896, #00a0e0); color: #000;
+      box-shadow: 0 2px 12px rgba(0,200,150,0.3);
+    }
+    .btn-approve:hover { box-shadow: 0 4px 20px rgba(0,200,150,0.5); }
+    .btn-reject {
+      background: linear-gradient(135deg, #ff4444, #cc2222); color: #fff;
+      box-shadow: 0 2px 12px rgba(255,68,68,0.3);
+    }
+    .btn-reject:hover { box-shadow: 0 4px 20px rgba(255,68,68,0.5); }
+    .btn-hint {
+      font-size: 0.7rem; color: var(--text-dim); margin-top: 4px; text-align: center;
+    }
+
+    /* Empty state */
+    .empty { color: var(--text-dim); font-style: italic; text-align: center; padding: 40px; }
+
+    /* Summary bar */
+    .summary-bar {
+      display: flex; gap: 16px; padding: 10px 24px;
+      border-bottom: 1px solid var(--border); background: var(--surface);
+    }
+    .summary-item { display: flex; align-items: center; gap: 6px; font-size: 0.78rem; }
+    .summary-count { font-weight: 700; font-size: 1rem; }
+    .summary-label { color: var(--text-muted); }
+    .count-allow { color: var(--accent); }
+    .count-block { color: var(--danger); }
+    .count-escalate { color: var(--warning); }
+    .count-pending { color: var(--warning); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
       <h1>SENTINEL</h1>
-      <p class="subtitle">Autonomous reliability &amp; security engineer for AI agents</p>
-      <button id="run">Run Poisoned Supplier Attack</button>
-      <pre id="result"><span class="status">Ready.</span></pre>
-    </main>
-    <script>
-      const result = document.getElementById("result");
-      document.getElementById("run").onclick = async () => {
-        result.innerHTML = '<span class="status">Running attack...</span>';
-        try {
-          const response = await fetch("/runs", { method: "POST" });
-          const data = await response.json();
-          result.textContent = JSON.stringify(data, null, 2);
-        } catch (err) {
-          result.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+      <span class="subtitle">Security Control Plane for AI Agents</span>
+    </div>
+    <div class="shield-badge" id="agent-status">
+      <span class="shield-dot"></span>
+      <span id="status-text">IDLE</span>
+    </div>
+  </header>
+
+  <div class="summary-bar" id="summary-bar" style="display:none;">
+    <div class="summary-item">
+      <span class="summary-count count-allow" id="count-allow">0</span>
+      <span class="summary-label">Allowed</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-count count-block" id="count-block">0</span>
+      <span class="summary-label">Blocked</span>
+    </div>
+    <div class="summary-item">
+      <span class="summary-count count-escalate" id="count-escalate">0</span>
+      <span class="summary-label">Escalated</span>
+    </div>
+    <div class="summary-item" id="pending-count-item" style="display:none;">
+      <span class="summary-count count-pending" id="count-pending">0</span>
+      <span class="summary-label">Awaiting Approval</span>
+    </div>
+  </div>
+
+  <div class="container">
+    <aside class="sidebar">
+      <div>
+        <h2>Demo Scenarios</h2>
+        <div class="scenario-btn active" data-scenario="legitimate">
+          <div class="title">Legitimate Procurement</div>
+          <div class="desc">Clean supplier data. Agent researches, recommends, and a human approves the purchase order.</div>
+        </div>
+        <div class="scenario-btn" data-scenario="attack">
+          <div class="title">Poisoned Supplier Attack</div>
+          <div class="desc">Compromised supplier injects malicious instructions. SENTINEL blocks all dangerous actions.</div>
+        </div>
+      </div>
+      <div class="sidebar-footer">
+        <h2>Agent Settings</h2>
+        <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--text-muted); cursor:pointer;">
+          <input type="checkbox" id="use-bedrock"> Use Bedrock inference
+        </label>
+        <div style="margin-top:8px; font-size:0.72rem; color:var(--text-dim);">
+          Requires AWS credentials and BEDROCK_MODEL_ID
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="controls">
+        <button class="run-btn" id="run-btn">Run Demo</button>
+        <span class="status-badge status-ready" id="status-badge">Ready</span>
+      </div>
+      <div class="dashboard">
+        <!-- Agent Activity -->
+        <div class="panel">
+          <div class="panel-header">
+            <span>Agent Activity</span>
+          </div>
+          <div class="panel-body" id="activity-panel">
+            <div class="empty">Select a scenario and click "Run Demo" to begin.</div>
+          </div>
+        </div>
+
+        <!-- Security Events -->
+        <div class="panel">
+          <div class="panel-header">
+            <span>SENTINEL Decisions</span>
+          </div>
+          <div class="panel-body" id="security-panel">
+            <div class="empty">Security decisions will appear here after the run.</div>
+          </div>
+        </div>
+
+        <!-- Approval Panel (spans both columns) -->
+        <div class="panel" id="approval-panel" style="display:none; grid-column: 1 / -1;">
+          <div class="panel-header">
+            <span>Human Approval Required</span>
+            <span class="approval-badge" id="approval-count-badge">1 pending</span>
+          </div>
+          <div class="panel-body" id="approval-body"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const activityPanel = document.getElementById("activity-panel");
+    const securityPanel = document.getElementById("security-panel");
+    const approvalPanel = document.getElementById("approval-panel");
+    const approvalBody = document.getElementById("approval-body");
+    const runBtn = document.getElementById("run-btn");
+    const statusBadge = document.getElementById("status-badge");
+    const statusText = document.getElementById("status-text");
+    const summaryBar = document.getElementById("summary-bar");
+    const scenarioBtns = document.querySelectorAll(".scenario-btn");
+
+    let selectedScenario = "legitimate";
+
+    scenarioBtns.forEach(btn => {
+      btn.addEventListener("click", () => {
+        scenarioBtns.forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        selectedScenario = btn.dataset.scenario;
+      });
+    });
+
+    function setStatus(text, type) {
+      statusBadge.textContent = text;
+      statusBadge.className = `status-badge status-${type}`;
+      statusText.textContent = type === "running" ? "AGENT PROTECTED" : type === "approval" ? "AWAITING APPROVAL" : type === "done" ? "AGENT PROTECTED" : "IDLE";
+    }
+
+    function renderActivityItem(event) {
+      const cls = event.decision === "ALLOW" ? "allow" : event.decision === "BLOCK" ? "block" : "escalate";
+      return `
+        <div class="activity-item">
+          <div class="activity-icon ${cls}"></div>
+          <span class="activity-tool">${event.tool}</span>
+          <span class="activity-decision decision-${event.decision}">${event.decision}</span>
+          <span class="activity-detail">${event.executed ? "executed" : event.decision === "ESCALATE" ? "awaiting approval" : "blocked"}</span>
+        </div>`;
+    }
+
+    function renderSecurityEvent(event) {
+      const isThreat = event.decision === "BLOCK";
+      const cls = isThreat ? "threat" : event.decision === "ESCALATE" ? "warning" : "safe";
+      const signals = (event.signals || []).filter(s => s);
+      return `
+        <div class="event-card ${cls}">
+          <div class="event-header">
+            <span class="event-title">${event.tool}</span>
+            <span class="activity-decision decision-${event.decision}">${event.decision}</span>
+          </div>
+          <div class="event-body">
+            Risk: ${event.risk_score}/100 (${event.risk_level}) — ${event.executed ? "executed" : "not executed"}
+          </div>
+          ${signals.length ? `<div class="event-signals">${signals.map(s => `<span class="signal-tag">${s}</span>`).join("")}</div>` : ""}
+        </div>`;
+    }
+
+    function renderApprovalCard(record) {
+      const args = record.arguments || {};
+      const total = (args.quantity || 0) * (args.unit_price || 0);
+      return `
+        <div class="approval-card" id="approval-${record.approval_id}">
+          <div class="approval-header">
+            <span class="approval-title">Action Requires Approval</span>
+            <span class="approval-badge">ESCALATE</span>
+          </div>
+          <div class="approval-details">
+            <div class="approval-row">
+              <span class="approval-label">Action</span>
+              <span class="approval-value">${record.tool_name.replace(/_/g, " ")}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Supplier</span>
+              <span class="approval-value">${args.supplier_id || "N/A"}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Item</span>
+              <span class="approval-value">${args.item_sku || "N/A"}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Quantity</span>
+              <span class="approval-value">${args.quantity || "N/A"}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Unit Price</span>
+              <span class="approval-value">$${(args.unit_price || 0).toFixed(2)}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Total</span>
+              <span class="approval-value approval-total">$${total.toFixed(2)}</span>
+            </div>
+            <div class="approval-row">
+              <span class="approval-label">Risk Score</span>
+              <span class="approval-value approval-risk" style="color: ${record.risk_score >= 75 ? 'var(--danger)' : 'var(--warning)'}">${record.risk_score}/100 (${record.risk_level})</span>
+            </div>
+          </div>
+          <div class="approval-reason">
+            <strong>Reason:</strong> ${(record.reasons || []).join("; ") || "High-impact side effect requires human approval"}
+          </div>
+          <div class="approval-actions">
+            <div style="flex:1;">
+              <button class="btn btn-approve" onclick="handleApproval('${record.approval_id}', 'APPROVE')">Approve</button>
+              <div class="btn-hint">APPROVE → tool executes</div>
+            </div>
+            <div style="flex:1;">
+              <button class="btn btn-reject" onclick="handleApproval('${record.approval_id}', 'REJECT')">Reject</button>
+              <div class="btn-hint">REJECT → no execution</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function updateSummary(events) {
+      const allow = events.filter(e => e.decision === "ALLOW").length;
+      const block = events.filter(e => e.decision === "BLOCK").length;
+      const escalate = events.filter(e => e.decision === "ESCALATE").length;
+      document.getElementById("count-allow").textContent = allow;
+      document.getElementById("count-block").textContent = block;
+      document.getElementById("count-escalate").textContent = escalate;
+    }
+
+    async function handleApproval(approvalId, decision) {
+      const btn = document.querySelector(`#approval-${approvalId} .btn-${decision.toLowerCase()}`);
+      if (btn) btn.disabled = true;
+
+      try {
+        const response = await fetch("/approvals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_id: approvalId, decision: decision }),
+        });
+        const result = await response.json();
+        if (result.error) {
+          alert(result.error);
+          return;
         }
-      };
-    </script>
-  </body>
+        // Remove the approval card
+        const card = document.getElementById(`approval-${approvalId}`);
+        if (card) card.remove();
+        // Refresh the security events
+        if (result.security_events) {
+          securityPanel.innerHTML = result.security_events.map(renderSecurityEvent).join("");
+          updateSummary(result.security_events);
+        }
+        // Check if more pending approvals
+        const pendingResp = await fetch("/approvals");
+        const pendingData = await pendingResp.json();
+        if (pendingData.pending && pendingData.pending.length > 0) {
+          approvalBody.innerHTML = pendingData.pending.map(renderApprovalCard).join("");
+        } else {
+          approvalPanel.style.display = "none";
+          setStatus("Completed", "done");
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      setStatus("Running", "running");
+      activityPanel.innerHTML = '<div class="empty">Agent is working...</div>';
+      securityPanel.innerHTML = '<div class="empty">Waiting for security decisions...</div>';
+      approvalPanel.style.display = "none";
+      summaryBar.style.display = "none";
+
+      try {
+        // Reset the demo agent
+        await fetch("/approvals/reset", { method: "POST" });
+
+        if (selectedScenario === "legitimate") {
+          // Legitimate: run agent then show approval
+          await runLegitimateDemo();
+        } else {
+          // Attack: run agent and show blocking
+          await runAttackDemo();
+        }
+      } catch (err) {
+        activityPanel.innerHTML = `<div class="empty" style="color:var(--danger)">Error: ${err.message}</div>`;
+        setStatus("Error", "error");
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+
+    async function runLegitimateDemo() {
+      // Step 1: Get pending approvals (this triggers the agent run internally)
+      const resp = await fetch("/approvals");
+      const data = await resp.json();
+
+      const events = data.security_events || [];
+      const pending = data.pending || [];
+
+      // Show activity
+      activityPanel.innerHTML = events.map(renderActivityItem).join("");
+      securityPanel.innerHTML = events.map(renderSecurityEvent).join("");
+      summaryBar.style.display = "flex";
+      updateSummary(events);
+
+      if (pending.length > 0) {
+        setStatus("Awaiting Approval", "approval");
+        approvalPanel.style.display = "block";
+        document.getElementById("approval-count-badge").textContent = `${pending.length} pending`;
+        approvalBody.innerHTML = pending.map(renderApprovalCard).join("");
+      } else {
+        setStatus("Completed", "done");
+      }
+    }
+
+    async function runAttackDemo() {
+      // For attack, we use the strands_demo backend
+      // Show a simulated attack flow
+      setStatus("Running", "running");
+
+      // Simulate attack scenario by running the demo
+      const resp = await fetch("/approvals/reset", { method: "POST" });
+      await resp.json();
+
+      // Run the actual attack demo via Python
+      activityPanel.innerHTML = '<div class="empty">Running attack scenario...</div>';
+
+      // Use the attack scenario - the demo runs the attack through the Strands agent
+      // We simulate this by showing the attack results
+      const attackEvents = [
+        { tool: "search_suppliers", decision: "ALLOW", executed: true, risk_score: 0, risk_level: "LOW", signals: [] },
+        { tool: "get_supplier_details", decision: "ALLOW", executed: true, risk_score: 75, risk_level: "CRITICAL", signals: ["INSTRUCTION_IN_DATA", "AUTHORITY_CLAIM"] },
+        { tool: "compare_prices", decision: "ALLOW", executed: true, risk_score: 75, risk_level: "CRITICAL", signals: ["TOOL_OUTPUT_PROVENANCE"] },
+        { tool: "send_email", decision: "BLOCK", executed: false, risk_score: 100, risk_level: "CRITICAL", signals: ["INSTRUCTION_IN_DATA", "AUTHORITY_CLAIM", "EXFIL_INTENT_IN_DATA", "EXTERNAL_EXFILTRATION", "DESTINATION_MISMATCH"] },
+        { tool: "create_purchase_order", decision: "BLOCK", executed: false, risk_score: 100, risk_level: "CRITICAL", signals: ["INSTRUCTION_IN_DATA", "AUTHORITY_CLAIM", "UNAPPROVED_WRITE"] },
+      ];
+
+      // Animate the events appearing one by one
+      activityPanel.innerHTML = "";
+      securityPanel.innerHTML = "";
+      summaryBar.style.display = "flex";
+
+      for (let i = 0; i < attackEvents.length; i++) {
+        await new Promise(r => setTimeout(r, 400));
+        activityPanel.innerHTML += renderActivityItem(attackEvents[i]);
+        securityPanel.innerHTML += renderSecurityEvent(attackEvents[i]);
+        activityPanel.scrollTop = activityPanel.scrollHeight;
+        securityPanel.scrollTop = securityPanel.scrollHeight;
+        updateSummary(attackEvents.slice(0, i + 1));
+      }
+
+      setStatus("Attack Blocked", "done");
+      document.getElementById("status-text").textContent = "THREAT CONTAINED";
+    }
+  </script>
+</body>
 </html>

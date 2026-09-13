@@ -2,7 +2,7 @@
 
 Status: implementation blueprint. This document describes the smallest AWS-native system that can reliably demonstrate:
 
-`ATTACK -> DETECT -> EXPLAIN -> FIX -> RETEST -> LEARN`
+`ATTACK → DETECT → EXPLAIN → MITIGATE → RETEST → REGRESS`
 
 The first supported target is a simulated procurement agent. All procurement data and side effects are fixtures. No real supplier, email, or purchasing system is contacted by the MVP.
 
@@ -115,6 +115,47 @@ are deterministic and require no credentials. Its `vulnerable=True` mode is the 
 subject: it follows instructions embedded in supplier data, which is precisely the
 behaviour SENTINEL must contain.
 
+### 0.6 Human approval workflow
+
+When the risk engine scores a tool call and the policy engine returns `ESCALATE`, the call
+is **not** executed. Instead, it is recorded as a pending approval via `ApprovalManager`.
+
+```text
+  ESCALATE decision
+        │
+        ▼
+  ApprovalManager.record_escalation(approval_id, tool_name, arguments, risk)
+        │
+        ▼
+  Human reviews action, sees tool/args/risk/signals
+        │
+   ┌────┴────┐
+   ▼         ▼
+APPROVE    REJECT
+   │         │
+   ▼         ▼
+Mint fresh   Record rejection;
+Permit via    no execution
+PolicyEngine
+   │
+   ▼
+Tool executes with valid permit
+```
+
+Key properties:
+
+- **Fresh permit only**: `approve()` calls `PolicyEngine.permit()` with the exact arguments,
+  producing a one-time `ExecutionPermit`. The approval id alone is not enough.
+- **No stored permits**: permits exist only in memory during the current run. There is no
+  permit to steal or replay across runs.
+- **Reject is final**: `reject()` records the decision and returns `None`. No execution occurs.
+- **Agent integration**: `SentinelStrandsAgent` exposes `pending_approvals()`, `approve()`,
+  and `reject()` to the frontend/dashboard.
+
+The approval manager is used by the demo and the frontend security dashboard. In production,
+it would be backed by a durable store (DynamoDB) and integrated with SES/SNS for
+notification.
+
 ---
 
 
@@ -162,7 +203,7 @@ Single-page React application served from S3 and CloudFront. It has three views:
 
 - `Demo`: start the canonical poisoned-supplier attack and watch the workflow timeline.
 - `Run`: show attack input, tool results, proposed actions, findings, scores, and retest.
-- `Regression`: show learned attack cases and their latest pass/fail state.
+- `Regression`: show detected attack cases and their latest pass/fail state.
 
 The UI never calls agents directly. It calls the API and renders persisted events.
 
@@ -505,7 +546,7 @@ Run the suite locally with pytest and in CI with the Strands Evals CLI or a smal
 | Agent runtime | Bedrock AgentCore Runtime | Hosted target agent after local demo is stable |
 | Agent framework | Strands Agents | Agent loop, tools, hooks, interventions, tracing |
 | Tool boundary | AgentCore Gateway + Policy | Optional hosted Cedar coarse policy layer |
-| Orchestration | Step Functions Standard | Durable ATTACK through LEARN workflow |
+| Orchestration | Step Functions Standard | Durable ATTACK through REGRESS workflow |
 | Compute | Lambda | API and workflow task workers |
 | Primary state | DynamoDB | Runs, events, findings, regressions |
 | Evidence | S3 | Raw traces, scenario snapshots, reports |

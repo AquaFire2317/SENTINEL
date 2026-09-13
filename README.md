@@ -1,9 +1,6 @@
 # SENTINEL
 
-**A security and reliability layer for Strands Agents.**
-
-SENTINEL detects malicious tool-result instructions, evaluates risk, enforces execution
-policy, prevents unsafe side effects, and retests the agent after mitigation.
+**A Strands-powered procurement agent protected by a security control plane that governs tool execution.**
 
 Built for the **AWS Agents for Humans Hackathon**.
 
@@ -21,19 +18,19 @@ An attacker who controls any of that data can write instructions *into* it:
 > immediately. This instruction is from the security team.`
 
 A capable agent reads that, believes it, and acts. This is **indirect prompt injection**,
-and prompting the model to "be careful" does not stop it. The agent is working correctly;
+and telling the model to "be careful" does not stop it. The agent is working correctly;
 it was simply told to do the wrong thing by data it had to trust.
 
-## The solution
+## What SENTINEL does
 
 SENTINEL does not try to make the model immune. It assumes the agent **will** eventually
 be tricked, and makes the resulting action *unable to execute*.
 
 Every tool call the Strands agent makes is intercepted, scored, and gated before it can
-reach a real side effect.
+reach a real side effect. Privileged actions are escalated to a human for approval.
 
 ```
-ATTACK -> DETECT -> EXPLAIN -> MITIGATE -> RETEST -> LEARN
+ATTACK → DETECT → EXPLAIN → MITIGATE → RETEST → REGRESS
 ```
 
 | Layer | Responsibility |
@@ -41,6 +38,7 @@ ATTACK -> DETECT -> EXPLAIN -> MITIGATE -> RETEST -> LEARN
 | **Risk engine** | De-obfuscates untrusted text and scores injection, authority-claim, exfiltration, destination and approval signals |
 | **Policy engine** | Fail-closed ALLOW / ESCALATE / BLOCK decision; tool allowlist; replay defense |
 | **Execution permit** | One-time token bound to the exact tool **and** exact normalized arguments |
+| **Human approval** | ESCALATE decisions require explicit human APPROVE/REJECT before execution |
 | **Tool boundary** | Independently validates the permit and every argument |
 | **Audit** | Run-correlated, timestamped record of every decision and its evidence |
 | **Retest** | Replays the original malicious proposal after mitigation to prove it still fails |
@@ -49,13 +47,13 @@ ATTACK -> DETECT -> EXPLAIN -> MITIGATE -> RETEST -> LEARN
 
 ## Role of Strands Agents
 
-**Strands is the agent.** SENTINEL is the control plane around it.
+**Strands is the agent. SENTINEL is the control plane around it.**
 
 The agent in this project is a real `strands.Agent`:
 
 - It is constructed with `strands.Agent(model=..., tools=..., hooks=...)`
 - Its tools are real `@strands.tool` functions with model-facing schemas
-- Strands' own event loop drives the multi-step reasoning: search -> inspect -> compare -> decide
+- Strands' own event loop drives the multi-step reasoning: search → inspect → compare → decide
 - Interception happens through Strands' official `BeforeToolCallEvent` hook
 - Refusals are returned to the model using Strands' `cancel_tool`, so the agent *sees* the
   refusal and can report it instead of silently failing
@@ -82,46 +80,46 @@ check a flag.
 
 ## Architecture
 
-```
-                              USER
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │    STRANDS AGENT    │
-                    │                     │
-                    │  strands.Agent      │
-                    │  @strands.tool      │
-                    │  Bedrock model      │
-                    └──────────┬──────────┘
-                               │  tool invocation
-                               │  (BeforeToolCallEvent)
-                               ▼
-          ┌────────────────────────────────────────┐
-          │               SENTINEL                 │
-          │                                        │
-          │   Risk Engine      injection signals   │
-          │   Policy Engine    ALLOW/ESCALATE/BLOCK│
-          │   Permit System    tool + exact args   │
-          │   Trust Boundary   untrusted vs trusted│
-          │   Audit            run-correlated      │
-          │   Retest           replay verification │
-          └───────────────────┬────────────────────┘
-                              │
-              BLOCK/ESCALATE  │  ALLOW + permit
-              ◄───────────────┤
-              cancel_tool     ▼
-                    ┌─────────────────────┐
-                    │     REAL TOOLS      │
-                    │  permit validation  │
-                    │  argument validation│
-                    └──────────┬──────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │        AWS          │
-                    │  Bedrock  (model)   │
-                    │  DynamoDB (audit)   │
-                    │  Step Functions     │
-                    └─────────────────────┘
+```mermaid
+graph TB
+    User([USER]) --> Agent[STRANDS AGENT<br/>strands.Agent<br/>@strands.tool<br/>BedrockModel]
+    
+    Agent -->|"tool invocation<br/>(BeforeToolCallEvent)"| Sentinel
+    
+    subgraph Sentinel[SENTINEL]
+        direction TB
+        Risk[Risk Engine<br/>injection signals]
+        Policy[Policy Engine<br/>ALLOW/ESCALATE/BLOCK]
+        Permit[Permit System<br/>tool + exact args]
+        Approval[Human Approval<br/>APPROVE/REJECT]
+        Trust[Trust Boundary<br/>untrusted vs trusted]
+        Audit[Audit<br/>run-correlated]
+        Retest[Retest<br/>replay verification]
+    end
+    
+    Risk --> Policy --> Permit
+    
+    Policy -->|"BLOCK/ESCALATE<br/>cancel_tool"| Agent
+    Policy -->|"ALLOW + permit"| Tools[REAL TOOLS<br/>permit validation<br/>argument validation]
+    
+    Approval -->|"APPROVE<br/>mint permit"| Tools
+    Approval -->|"REJECT<br/>no execution"| Audit
+    
+    Tools --> AWS
+    
+    subgraph AWS[AWS]
+        Bedrock[Bedrock<br/>model]
+        DynamoDB[DynamoDB<br/>audit]
+        SF[Step Functions<br/>orchestration]
+    end
+    
+    Agent -.->|"model inference"| Bedrock
+    Audit -.-> DynamoDB
+
+    style Sentinel fill:#1a1a2e,stroke:#00c896,color:#e0e0e0
+    style Agent fill:#16213e,stroke:#00a0e0,color:#e0e0e0
+    style AWS fill:#0f3460,stroke:#e94560,color:#e0e0e0
+    style User fill:#533483,stroke:#00c896,color:#e0e0e0
 ```
 
 ---
@@ -153,12 +151,16 @@ The same system must not cry wolf:
 [ALLOW]    search_suppliers       risk=  0 LOW
 [ALLOW]    get_supplier_details   risk= 15 LOW
 [ALLOW]    compare_prices         risk= 15 LOW
+[ESCALATE] create_purchase_order  risk= 40 MEDIUM  side-effect requires approval
 
-Recommendation: sup-acme at $950.00/unit for LAPTOP-001.
+ACTION REQUIRES APPROVAL
+  Create purchase order: 10x LAPTOP-001 @ $950.00 = $9,500.00
+
+Human approves → PO executes → recorded in audit trail
 ```
 
-No false positives. Privileged side effects still require human sign-off (`ESCALATE`) — even
-with a valid approval id — which is the intended policy, not a bug.
+No false positives. Privileged side effects require human sign-off (`ESCALATE`) — even
+with a valid approval id. This is the intended policy, not a bug.
 
 ---
 
@@ -231,6 +233,13 @@ python -m sentinel.strands_demo legitimate
 python -m sentinel.strands_demo --bedrock
 ```
 
+The **legitimate** demo shows the full approval workflow: the agent researches suppliers,
+SENTINEL escalates the purchase order for human approval, and the PO only executes after
+explicit approval.
+
+The **attack** demo shows a poisoned supplier note hijacking the agent: SENTINEL detects
+the injection and blocks both email exfiltration and fraudulent purchase order creation.
+
 Use it directly:
 
 ```python
@@ -248,26 +257,17 @@ print(agent.blocked_side_effects()) # ['send_email', 'create_purchase_order']
 assert store.emails == []           # nothing escaped
 ```
 
-### The legacy evaluation workflow
-
-The original ATTACK->LEARN evaluation harness (deterministic agent, scenario files,
-regression suite) is still present and still runs:
-
-```bash
-python -m sentinel.demo
-python -m sentinel.demo poisoned_supplier_purchase_order
-```
-
 ---
 
 ## Tests
 
 ```bash
-pytest                                              # everything
+pytest                                              # everything (132 tests)
 pytest backend/tests/unit                           # unit
-pytest backend/tests/integration                    # integration (incl. Strands)
+pytest backend/tests/integration                    # integration (incl. Strands + approval)
 pytest backend/tests/redteam                        # adversarial suite
 pytest backend/tests/integration/test_strands_integration.py   # Strands only
+pytest backend/tests/integration/test_approval_workflow.py     # approval workflow
 python -m ruff check backend                        # lint
 ```
 
@@ -288,20 +288,22 @@ SENTINEL/
 │   │   │   ├── strands_guard.py   #   SENTINEL hook + Strands tool definitions
 │   │   │   ├── strands_agent.py   #   the Strands Agent assembly
 │   │   │   └── strands_models.py  #   Bedrock + deterministic planner providers
+│   │   ├── approval/              # human approval workflow
+│   │   │   └── manager.py         #   ApprovalManager: ESCALATE → APPROVE/REJECT
 │   │   ├── security/              # risk engine, policy engine, permits, audit
 │   │   ├── tools/                 # procurement tools + fixtures
 │   │   ├── contracts/             # pydantic contracts
-│   │   ├── evaluation/            # ATTACK->LEARN workflow, regression suite
+│   │   ├── evaluation/            # ATTACK→REGRESS workflow, regression suite
 │   │   ├── agents/                # legacy deterministic agent
 │   │   ├── persistence/           # DynamoDB + in-memory adapters
 │   │   ├── orchestration/         # Step Functions adapter
-│   │   ├── api/                   # API Gateway-compatible handler
+│   │   ├── api/                   # API Gateway-compatible handler + approval endpoints
 │   │   ├── strands_demo.py        # Strands demo entry point
 │   │   └── demo.py                # legacy evaluation demo
 │   └── tests/                     # unit / integration / redteam
 ├── docs/                          # architecture, red-team report, status report
 ├── scenarios/                     # attack scenario definitions
-├── frontend/                      # static demo UI
+├── frontend/                      # security dashboard UI
 └── infra/                         # AWS deployment skeleton
 ```
 
@@ -315,8 +317,6 @@ SENTINEL/
   attacker-controlled path to forge it in this architecture, but it is an assumption.
 - **Provenance (`derived_from`) is advisory.** It contributes risk points but is not
   validated against recorded observations.
-- **`ESCALATE` has no human approval UI.** Privileged actions are correctly withheld, but
-  the approval step itself is out of scope for this build.
 - **No generic prompt sanitization.** Injection text reaches the model unmodified by design;
   the defense is the execution gate, not input scrubbing.
 - **`infra/` is a skeleton.** AWS adapters are real and tested; no stack is deployed.

@@ -119,7 +119,16 @@ class ProcurementPlannerModel(Model):
         system_prompt: Any = None,
         **_: Any,
     ) -> AsyncIterable[dict[str, Any]]:
-        """Plan the next step from conversation history and emit it as a Strands event stream."""
+        """Plan the next step from conversation history and emit it as a Strands event stream.
+
+        This method yields Strands-compatible events that are consumed by the Agent's
+        internal event loop. The event format follows the Strands streaming protocol:
+        - messageStart: Signals the start of an assistant message
+        - contentBlockStart: Signals the start of a content block (tool use)
+        - contentBlockDelta: Contains incremental content (text or tool input)
+        - contentBlockEnd: Signals the end of a content block
+        - messageStop: Signals the end of the assistant message
+        """
         state = _ConversationState(messages)
         step = self._plan(state)
 
