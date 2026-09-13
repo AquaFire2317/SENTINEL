@@ -110,22 +110,24 @@ class SentinelStrandsAgent:
         return None
 
     def security_events(self) -> list[dict[str, Any]]:
-        """Flat, presentable view of every SENTINEL decision in this run."""
+        """Flat, presentable view of every SENTINEL decision in this run.
+
+        Returns a snapshot; does not mutate the underlying audit state.
+        """
         events: list[dict[str, Any]] = []
+        matched_indices: set[int] = set()
         for observation in self.guard.observations:
-            decision_event = next(
-                (
-                    event
-                    for event in self.audit
-                    if event.event_type == "DECISION"
+            decision_event = None
+            for idx, event in enumerate(self.audit):
+                if (
+                    idx not in matched_indices
+                    and event.event_type == "DECISION"
                     and observation.call.tool_name in event.message
-                    and event.data.get("_matched") is not True
-                ),
-                None,
-            )
+                ):
+                    decision_event = event
+                    matched_indices.add(idx)
+                    break
             risk = (decision_event.data.get("risk") if decision_event else None) or {}
-            if decision_event is not None:
-                decision_event.data["_matched"] = True
             events.append(
                 {
                     "call_id": observation.call.call_id,
@@ -137,8 +139,6 @@ class SentinelStrandsAgent:
                     "signals": [item.get("signal") for item in risk.get("evidence", [])],
                 }
             )
-        for event in self.audit:
-            event.data.pop("_matched", None)
         return events
 
     def blocked_side_effects(self) -> list[str]:

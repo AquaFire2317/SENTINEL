@@ -1,17 +1,38 @@
 """Fail-closed ALLOW/BLOCK/ESCALATE policy engine.
 
-Hardening notes (red-team round 1):
-- Tools are allowlisted. A tool Sentinel does not recognize is BLOCKED, not
-  silently ALLOWED.
-- Every side-effect execution requires a one-time ExecutionPermit minted by
-  this engine. Tools must verify it, so calling the tool layer directly
-  (confused deputy) is refused.
-- Replay defense: an identical side-effect call signature may execute at
-  most once per engine instance; subsequent attempts are BLOCKED as replays.
+This module contains the SINGLE AUTHORITATIVE enforcement path for all
+tool-call authorization in SENTINEL. Every decision — whether it originates
+from the Strands agent hook, the human approval workflow, or the evaluation
+system — flows through this engine.
 
-Hardening notes (red-team round 2):
-- Replay signatures normalize numeric types: int(1) and float(1.0) produce
-  the same hash so attackers cannot bypass replay detection via type coercion.
+Architecture
+------------
+``evaluate()``
+    Pure decision function. Returns a SecurityDecision without side effects.
+    This is the single place where allowlists, risk thresholds, replay rules,
+    and side-effect classification are evaluated.
+
+``intercept()``
+    Decision + execution + audit. Calls evaluate() internally, then handles
+    permit minting, tool execution, signature recording, and audit events.
+    This is the standard path for all tool calls.
+
+``execute_approved()``
+    Authoritative execution path for human-approved side effects. Performs
+    the same validation as intercept() (allowlist, replay, permit minting,
+    signature recording) and adds a HUMAN_APPROVAL audit trail.
+
+``signature_for()``
+    Computes a deterministic, normalized signature for a tool + arguments
+    pair. Used for replay detection and permit validation.
+
+Security invariants
+-------------------
+- Tools are allowlisted. Unknown tools are BLOCKED.
+- Every side-effect execution requires a one-time ExecutionPermit.
+- Replay defense: an identical signature may execute at most once.
+- int/float normalization prevents type-coercion replay bypasses.
+- Permit validation is enforced at the tool boundary (ProcurementTools.call).
 """
 
 import hashlib
@@ -61,6 +82,18 @@ class ExecutionPermit:
 
 
 class PolicyEngine:
+    """Single authoritative enforcement path for tool-call authorization.
+
+    All policy decisions — regardless of origin (Strands hook, approval
+    workflow, evaluation system) — flow through this engine. The engine
+    owns: decision logic, permit minting, replay accounting, execution
+    authorization, and audit event generation.
+
+    Process-local state: ``_executed_signatures`` is in-memory and not
+    durable across restarts. A production deployment would need durable
+    replay protection.
+    """
+
     def __init__(
         self,
         audit: list[AuditEvent] | None = None,
@@ -91,68 +124,111 @@ class PolicyEngine:
         """Create a one-time ExecutionPermit bound to the exact tool + arguments."""
         return ExecutionPermit(self._signature(call))
 
+    # ---------------------------------------------------------------- evaluate
+
+    def evaluate(
+        self,
+        call: ToolCall,
+        prior_observations: list[ToolObservation],
+    ) -> SecurityDecision:
+        """Single authoritative policy decision. Pure function — no side effects.
+
+        Returns a SecurityDecision with the decision, risk assessment, reasons,
+        and whether human approval is required. Does NOT execute the tool,
+        mint permits, record audit events, or modify replay state.
+
+        This is the ONE place where:
+        - Tool allowlists are checked
+        - Risk is assessed via the detection engine
+        - Replay signatures are checked
+        - Decision thresholds are applied
+        """
+        if call.tool_name not in READ_TOOLS | SIDE_EFFECT_TOOLS:
+            return SecurityDecision(
+                decision=Decision.BLOCK,
+                risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                reasons=[f"Tool '{call.tool_name}' is not on the allowlist"],
+                policy_version=self.policy_version,
+                required_approval=False,
+            )
+
+        risk = assess_tool_call(call, prior_observations, self.issued_approvals)
+        is_side_effect = call.tool_name in SIDE_EFFECT_TOOLS
+        signature = self._signature(call)
+
+        if is_side_effect and signature in self._executed_signatures:
+            decision = Decision.BLOCK
+            reasons = ["Duplicate side-effect call signature; replays are denied"]
+        elif not is_side_effect:
+            decision = Decision.ALLOW
+            reasons = [item.text for item in risk.evidence]
+        elif risk.score >= 75:
+            decision = Decision.BLOCK
+            reasons = [item.text for item in risk.evidence]
+        else:
+            decision = Decision.ESCALATE
+            reasons = [item.text for item in risk.evidence] or [
+                f"{call.tool_name} is a side-effecting tool and requires approval"
+            ]
+
+        return SecurityDecision(
+            decision=decision,
+            risk=risk,
+            reasons=reasons,
+            policy_version=self.policy_version,
+            required_approval=decision == Decision.ESCALATE,
+        )
+
+    # ----------------------------------------------------------------- intercept
+
     def intercept(
         self,
         call: ToolCall,
         execute: Callable[..., ToolResult],
         prior_observations: list[ToolObservation],
     ) -> ToolObservation:
-        signature = self._signature(call)
+        """Standard enforcement path: decision + execution + audit.
+
+        Calls evaluate() for the decision, then for ALLOW: mints a permit,
+        executes the tool, records the execution signature, and returns a
+        ToolObservation with the result. For BLOCK/ESCALATE: returns without
+        executing. Records a DECISION audit event in all cases.
+
+        Exceptions during evaluation or execution are caught and converted
+        to BLOCK (fail-closed).
+        """
         try:
-            if call.tool_name not in READ_TOOLS | SIDE_EFFECT_TOOLS:
-                security_decision = SecurityDecision(
-                    decision=Decision.BLOCK,
-                    risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
-                    reasons=[f"Tool '{call.tool_name}' is not on the allowlist"],
-                    policy_version=self.policy_version,
-                    required_approval=False,
-                )
-                self._record("DECISION", f"BLOCK {call.tool_name}", security_decision.model_dump(mode="json"))
-                return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
-
-            risk = assess_tool_call(call, prior_observations, self.issued_approvals)
-            is_side_effect = call.tool_name in SIDE_EFFECT_TOOLS
-
-            if is_side_effect and signature in self._executed_signatures:
-                decision = Decision.BLOCK
-                reasons = ["Duplicate side-effect call signature; replays are denied"]
-            elif not is_side_effect:
-                decision = Decision.ALLOW
-                reasons = [item.text for item in risk.evidence]
-            elif risk.score >= 75:
-                decision = Decision.BLOCK
-                reasons = [item.text for item in risk.evidence]
-            else:
-                decision = Decision.ESCALATE
-                reasons = [item.text for item in risk.evidence] or [f"{call.tool_name} is a side-effecting tool and requires approval"]
-
-            security_decision = SecurityDecision(
-                decision=decision,
-                risk=risk,
-                reasons=reasons,
-                policy_version=self.policy_version,
-                required_approval=decision == Decision.ESCALATE,
+            security_decision = self.evaluate(call, prior_observations)
+            self._record(
+                "DECISION",
+                f"{security_decision.decision} {call.tool_name}",
+                security_decision.model_dump(mode="json"),
             )
-            self._record("DECISION", f"{decision} {call.tool_name}", security_decision.model_dump(mode="json"))
 
-            if decision in (Decision.BLOCK, Decision.ESCALATE):
-                return ToolObservation(call=call, decision=decision, executed=False)
+            if security_decision.decision in (Decision.BLOCK, Decision.ESCALATE):
+                return ToolObservation(
+                    call=call, decision=security_decision.decision, executed=False
+                )
 
             permit = self._mint_permit(call)
             result = execute(permit)
-            if is_side_effect:
-                self._executed_signatures.add(signature)
-            return ToolObservation(call=call, result=result, decision=decision, executed=True)
+            if call.tool_name in SIDE_EFFECT_TOOLS:
+                self._executed_signatures.add(self._signature(call))
+            return ToolObservation(
+                call=call, result=result, decision=security_decision.decision, executed=True
+            )
         except (TypeError, ValueError, KeyError, RuntimeError, PermissionError) as error:
             self._record("ERROR", "Policy evaluation failed closed", {"error": str(error)})
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
+    # -------------------------------------------------------- execute_approved
 
     def execute_approved(
         self,
         call: ToolCall,
         execute: Callable[..., ToolResult],
     ) -> ToolObservation:
-        """Execute an already-approved side effect through the authoritative path.
+        """Authoritative execution path for human-approved side effects.
 
         This is the ONLY way an approved side effect may execute. It performs
         the same validation as intercept() — allowlist, replay, permit minting,
@@ -214,6 +290,8 @@ class PolicyEngine:
             },
         )
         return ToolObservation(call=call, result=result, decision=Decision.ALLOW, executed=True)
+
+    # ----------------------------------------------------------------- audit
 
     def _record(self, event_type: str, message: str, data: dict) -> None:
         self.audit.append(AuditEvent(

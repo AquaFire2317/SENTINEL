@@ -156,6 +156,81 @@ The approval manager is used by the demo and the frontend security dashboard. In
 it would be backed by a durable store (DynamoDB) and integrated with SES/SNS for
 notification.
 
+### 0.7 Single authoritative enforcement path
+
+There is exactly ONE place where policy decisions, permit minting, execution
+authorization, and replay accounting occur: `PolicyEngine`.
+
+```text
+  Strands Agent (model reasoning)
+        │
+        ▼
+  SentinelToolGuard (adapter — no policy logic)
+        │
+        ├── BeforeToolCallEvent → ToolCall
+        │
+        ▼
+  PolicyEngine.intercept(call, execute, prior_observations)
+        │
+        ├── evaluate(call, prior_observations) → SecurityDecision
+        │       (tool allowlists, risk assessment, replay check,
+        │        decision thresholds — ONE implementation)
+        │
+        ├── _record("DECISION", ...)  →  audit event
+        │
+        ├── ALLOW → _mint_permit(call) → execute(permit) → record signature
+        │
+        ├── BLOCK → return without executing
+        │
+        └── ESCALATE → return without executing
+              │
+              ▼
+        ApprovalManager.record_escalation(...)
+              │
+              ▼
+        Human approves → PolicyEngine.execute_approved(call, execute)
+              │
+              ├── validate side-effect tool
+              ├── check replay signature
+              ├── _mint_permit(call)
+              ├── execute(permit)
+              ├── record signature
+              └── _record("APPROVED", ...)
+```
+
+The guard does NOT maintain a second implementation of policy semantics.
+It delegates to `PolicyEngine.intercept()` for all decisions and execution.
+The only Strands-specific concerns the guard handles are:
+- Converting `BeforeToolCallEvent` → `ToolCall`
+- Storing authorized results for Strands tool shims
+- Cancelling blocked/escalated tools via `event.cancel_tool`
+- Recording escalations for the human approval workflow
+
+This ensures:
+- Risk thresholds are evaluated in exactly one place
+- Permit minting is centralized
+- Replay accounting is centralized
+- Audit events are generated consistently
+- Future policy changes cannot cause enforcement drift between paths
+
+### 0.8 Honest limitations
+
+- **Process-local state**: `_executed_signatures`, audit events, and approval records
+  are in-memory and not durable across restarts. A production deployment would need
+  durable replay protection and persistent audit storage.
+- **Demo approval identity**: `operator="human"` is a string, not an authenticated
+  identity. The demo approval API models the human authorization boundary. A
+  production deployment should bind `operator_id` to an authenticated identity/IAM/
+  identity-provider principal.
+- **Heuristic detection**: The risk engine uses regex/keyword-based detection of
+  known prompt-injection and tool-abuse indicators. This is NOT semantic AI prompt-
+  injection detection. Security comes from authorization policy (fail-closed tool
+  authorization), not detection alone. Even if detection misses a malicious
+  instruction, the policy engine still enforces tool allowlists, permit requirements,
+  and replay protection.
+- **Single-process concurrency**: There is no distributed locking for approval or
+  replay. In the current architecture, all state is process-local.
+
 ---
 
 

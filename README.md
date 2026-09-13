@@ -292,7 +292,7 @@ assert store.emails == []           # nothing escaped
 ## Tests
 
 ```bash
-pytest                                              # everything (156 tests)
+pytest                                              # everything (169 tests)
 pytest backend/tests/unit                           # unit
 pytest backend/tests/integration                    # integration (incl. Strands + approval)
 pytest backend/tests/redteam                        # adversarial suite

