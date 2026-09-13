@@ -457,7 +457,7 @@ python -m sentinel.strands_demo --bedrock
 # Run legacy evaluation workflow
 python -m sentinel.demo
 
-# Run all 132 tests
+# Run all 156 tests
 python -m pytest
 
 # Check code quality
@@ -593,20 +593,34 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-132 tests passed
+156 tests passed
 
-Integration Tests — Strands (25):
+Integration Tests — Strands (28):
   TestStrandsWiring (4)                                              PASSED
   TestLegitimateStrandsWorkflow (1)                                  PASSED
   TestMaliciousToolResultAttack (3)                                  PASSED
   TestLegitimateSideEffect (2)                                       PASSED
-  TestEmailExfiltration (3, 1 parametrized x4)                      PASSED
+  TestEmailExfiltration (6)                                          PASSED
   TestPermitEnforcement (5)                                          PASSED
   TestStrandsRetest (1)                                              PASSED
   TestStrandsSecurityInvariants (6)                                  PASSED
 
+Integration Tests — Approval (40):
+  TestApprovalManager (5)                                            PASSED
+  TestApprovalStateProtection (4)                                    PASSED
+  TestApprovalBinding (5)                                            PASSED
+  TestReplayProtection (3)                                           PASSED
+  TestApprovalAuditTrail (2)                                         PASSED
+  TestSentinelAgentApproval (8)                                      PASSED
+  TestApprovalSecurityInvariants (3)                                 PASSED
+  TestApprovalWorkflowE2E (2)                                        PASSED
+  TestConcurrentApproval (2)                                         PASSED
+  TestForgedPermitInApproval (2)                                     PASSED
+  TestWrongRunApproval (1)                                           PASSED
+  TestRejectionAuditTrail (3)                                        PASSED
+
 Integration Tests — Workflow (9):
-  test_canonical_workflow_completes_attack_fix_retest_regress          PASSED
+  test_canonical_workflow_completes_attack_block_retest_regress      PASSED
   test_confirmed_report_becomes_regression_case                      PASSED
   test_poisoned_purchase_order_full_flow                             PASSED
   test_regression_added_when_retest_passes                           PASSED
@@ -616,7 +630,7 @@ Integration Tests — Workflow (9):
   test_retest_attack_observed_via_replay_verification                PASSED
   test_legitimate_procurement_workflow_succeeds                      PASSED
 
-Unit Tests (40):
+Unit Tests (34):
   test_package_has_version                                           PASSED
   test_settings_have_safe_local_defaults                             PASSED
   test_settings_accept_environment_aliases                           PASSED
@@ -651,9 +665,8 @@ Unit Tests (40):
   test_load_po_only_scenario                                         PASSED
   test_list_scenarios_returns_both                                   PASSED
   test_load_unknown_scenario_raises                                  PASSED
-  (+ 6 more unit tests)
 
-Red-Team Tests (42):
+Red-Team Tests (45):
   TestA1ObfuscatedInjection (3)                                      PASSED
   TestA2DestinationManipulation (1)                                  PASSED
   TestA3ForgedApproval (1)                                           PASSED
@@ -680,4 +693,4 @@ Red-Team Tests (42):
 
 **Document prepared: September 13, 2026**  
 **SENTINEL v0.2.0 — AWS Agents for Humans Hackathon Project**  
-**Status: Strands integration complete, 132/132 tests passing, ready for demo**
+**Status: 156/156 tests passing, Ruff clean, ready for demo**

@@ -157,8 +157,10 @@ class SentinelStrandsAgent:
         return [
             {
                 "approval_id": r.approval_id,
+                "run_id": r.run_id,
                 "tool_name": r.tool_name,
                 "arguments": r.arguments,
+                "signature": r.signature,
                 "risk_score": r.risk_score,
                 "risk_level": r.risk_level,
                 "reasons": r.reasons,

@@ -143,6 +143,17 @@ class ApprovalManager:
         record.status = ApprovalStatus.REJECTED
         record.operator = operator
         record.decided_at = datetime.now(UTC).isoformat()
+        self.policy._record(
+            "DECISION",
+            f"REJECTED {record.tool_name}",
+            {
+                "decision": "REJECTED",
+                "authorization_source": "HUMAN_REJECTION",
+                "tool_name": record.tool_name,
+                "approval_id": record.approval_id,
+                "policy_version": self.policy.policy_version,
+            },
+        )
         return True
 
     def get_record(self, approval_id: str) -> ApprovalRecord | None:

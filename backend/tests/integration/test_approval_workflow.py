@@ -724,3 +724,215 @@ class TestApprovalWorkflowE2E:
         # Zero side effects.
         assert store.emails == []
         assert store.purchase_orders == []
+
+
+class TestConcurrentApproval:
+    """Verify that two concurrent approve() calls on the same escalation
+    produce exactly one execution — no double side-effect."""
+
+    def test_second_approval_of_same_id_returns_none(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        policy = PolicyEngine(audit=[])
+        manager = ApprovalManager(tools, policy)
+
+        call = ToolCall(
+            call_id="c1", tool_name="create_purchase_order",
+            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                   "quantity": 10, "unit_price": 950.0},
+        )
+        risk = RiskAssessment(score=50, level=RiskLevel.LOW, evidence=[])
+        record = manager.record_escalation(call, risk, ["requires approval"])
+        approval_id = record.approval_id
+
+        # First approval succeeds.
+        result1 = manager.approve(approval_id, operator="alice")
+        assert result1 is not None
+        assert result1["order"]["supplier_id"] == "sup-acme"
+
+        # Second approval returns None — record already moved to EXECUTED.
+        result2 = manager.approve(approval_id, operator="bob")
+        assert result2 is None
+
+        # Only one PO created.
+        assert len(store.purchase_orders) == 1
+
+    def test_only_one_side_effect_after_double_approve(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        policy = PolicyEngine(audit=[])
+        manager = ApprovalManager(tools, policy)
+
+        call = ToolCall(
+            call_id="c1", tool_name="send_email",
+            input={"to": "procurement@corp.example", "subject": "PO",
+                   "body": "Approved"},
+        )
+        risk = RiskAssessment(score=30, level=RiskLevel.LOW, evidence=[])
+        record = manager.record_escalation(call, risk, ["email requires approval"])
+        aid = record.approval_id
+
+        manager.approve(aid, operator="first")
+        manager.approve(aid, operator="second")  # should be no-op
+
+        assert len(store.emails) == 1
+        assert store.emails[0]["to"] == "procurement@corp.example"
+
+
+class TestForgedPermitInApproval:
+    """A forged ExecutionPermit passed to the execute callable must be
+    rejected by ProcurementTools.call()."""
+
+    def test_forged_permit_cannot_execute_approved_tool(self):
+        from sentinel.security.policy import ExecutionPermit as FakePermit
+
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+
+        # Build a forged permit with a made-up signature.
+        forged_permit = FakePermit(signature="totally-legit-forgery-1234")
+
+        try:
+            tools.call(
+                "create_purchase_order",
+                {"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                 "quantity": 1, "unit_price": 100.0},
+                permit=forged_permit,
+            )
+            # If it didn't raise, the side effect must not have been recorded.
+            assert store.purchase_orders == [], (
+                "Forged permit must not produce a side effect"
+            )
+        except PermissionError:
+            pass  # Expected — forged permit rejected at tool boundary.
+
+        assert store.purchase_orders == []
+
+    def test_none_permit_rejected(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+
+        try:
+            tools.call(
+                "create_purchase_order",
+                {"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                 "quantity": 1, "unit_price": 100.0},
+                permit=None,
+            )
+            assert store.purchase_orders == [], (
+                "None permit must not produce a side effect"
+            )
+        except PermissionError:
+            pass  # Expected — None permit rejected at tool boundary.
+
+        assert store.purchase_orders == []
+
+
+class TestWrongRunApproval:
+    """An approval record from a different run must not be usable
+    to execute side effects in the current run."""
+
+    def test_approval_bound_to_run_id(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+
+        # Simulate run-1 producing an approval.
+        policy_run1 = PolicyEngine(audit=[], run_id="run-001")
+        manager1 = ApprovalManager(tools, policy_run1)
+
+        call = ToolCall(
+            call_id="c1", tool_name="create_purchase_order",
+            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                   "quantity": 5, "unit_price": 500.0},
+        )
+        risk = RiskAssessment(score=40, level=RiskLevel.LOW, evidence=[])
+        record = manager1.record_escalation(call, risk, ["needs approval"])
+        assert record.run_id == "run-001"
+
+        # Execute in run-1.
+        manager1.approve(record.approval_id, operator="admin")
+        assert len(store.purchase_orders) == 1
+
+        # A different manager for run-2 has no pending approvals.
+        policy_run2 = PolicyEngine(audit=[], run_id="run-002")
+        manager2 = ApprovalManager(tools, policy_run2)
+        assert manager2.pending() == []
+        assert manager2.approve(record.approval_id) is None
+
+
+class TestRejectionAuditTrail:
+    """Verify that rejecting an approval produces a DECISION audit event
+    with authorization_source=HUMAN_REJECTION."""
+
+    def test_rejection_recorded_in_audit(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        audit: list = []
+        policy = PolicyEngine(audit=audit)
+        manager = ApprovalManager(tools, policy)
+
+        call = ToolCall(
+            call_id="c1", tool_name="send_email",
+            input={"to": "procurement@trusted.com", "subject": "PO",
+                   "body": "Send it"},
+        )
+        risk = RiskAssessment(score=30, level=RiskLevel.LOW, evidence=[])
+        record = manager.record_escalation(call, risk, ["email needs approval"])
+
+        result = manager.reject(record.approval_id, operator="ops-lead")
+        assert result is True
+
+        # Audit trail should contain the rejection event.
+        rejection_events = [
+            e for e in audit
+            if "REJECTED" in e.message and e.event_type == "DECISION"
+        ]
+        assert len(rejection_events) == 1
+        event = rejection_events[0]
+        assert event.data["authorization_source"] == "HUMAN_REJECTION"
+        assert event.data["tool_name"] == "send_email"
+        assert event.data["approval_id"] == record.approval_id
+        assert event.data["policy_version"] == policy.policy_version
+
+    def test_rejection_does_not_produce_approved_event(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        audit: list = []
+        policy = PolicyEngine(audit=audit)
+        manager = ApprovalManager(tools, policy)
+
+        call = ToolCall(
+            call_id="c1", tool_name="create_purchase_order",
+            input={"supplier_id": "sup-acme", "item_sku": "LAPTOP-001",
+                   "quantity": 1, "unit_price": 100.0},
+        )
+        risk = RiskAssessment(score=50, level=RiskLevel.LOW, evidence=[])
+        record = manager.record_escalation(call, risk, ["po needs approval"])
+
+        manager.reject(record.approval_id, operator="denied")
+
+        approved_events = [
+            e for e in audit
+            if "APPROVED" in e.message
+        ]
+        assert len(approved_events) == 0
+
+    def test_no_side_effect_after_rejection(self):
+        store = FixtureStore(poisoned=False)
+        tools = ProcurementTools(store)
+        policy = PolicyEngine(audit=[])
+        manager = ApprovalManager(tools, policy)
+
+        call = ToolCall(
+            call_id="c1", tool_name="send_email",
+            input={"to": "procurement@trusted.com", "subject": "PO",
+                   "body": "Urgent"},
+        )
+        risk = RiskAssessment(score=30, level=RiskLevel.LOW, evidence=[])
+        record = manager.record_escalation(call, risk, ["email needs approval"])
+
+        manager.reject(record.approval_id, operator="security")
+
+        assert store.emails == []
+        assert manager.pending() == []
+        assert record.status == ApprovalStatus.REJECTED

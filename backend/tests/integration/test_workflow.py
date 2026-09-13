@@ -4,7 +4,7 @@ from sentinel.evaluation.regression import RegressionSuite
 from sentinel.evaluation.workflow import CANONICAL_SCENARIO, EvaluationWorkflow
 
 
-def test_canonical_workflow_completes_attack_fix_retest_learn():
+def test_canonical_workflow_completes_attack_block_retest_regress():
     report = EvaluationWorkflow().run()
 
     assert report.scenario_id == CANONICAL_SCENARIO.scenario_id

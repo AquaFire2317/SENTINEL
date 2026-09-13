@@ -14,13 +14,13 @@ This session:
 - Analyzed the full codebase for gaps Kimi missed
 - Launched Wave 3: 12 new tests across 8 untested attack categories
 - Found 3 real code-level issues, fixed them
-- Ran complete test suite: **132 tests passing, Ruff clean**
+- Ran complete test suite: **156 tests passing, Ruff clean**
 
 ## What I Inherited
 
 | Component | Status |
 |-----------|--------|
-| 132 tests passing | ✅ |
+| 156 tests passing | ✅ |
 | 9 Kimi findings fixed | ✅ |
 | 6 Kimi bypass tests passing | ✅ |
 | Ruff clean | ✅ |
@@ -135,7 +135,7 @@ elif not is_side_effect:
 ## Test Suite
 
 ```
-132 tests passing (34 unit + 50 integration including 16 approval + 48 redteam)
+156 tests passing (34 unit + 40 approval integration + 28 strands integration + 9 workflow integration + 45 redteam)
 Ruff: clean
 ```
 
