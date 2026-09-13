@@ -84,6 +84,10 @@ class SentinelToolGuard:
         self.tools = tools
         self.audit: list[AuditEvent] = [] if policy is None else policy.audit
         self.policy = policy or PolicyEngine(self.audit, run_id=run_id)
+        # Bind the tool boundary to this run's PolicyEngine so the tools only
+        # accept permits this engine issued. This is what makes a permit from
+        # another run (or a hand-constructed one) unusable here.
+        self.tools.bind_issuer(self.policy)
         self.observations: list[ToolObservation] = []
         self.approval_manager = ApprovalManager(tools, self.policy)
         # toolUseId -> result SENTINEL authorized and executed
@@ -106,7 +110,33 @@ class SentinelToolGuard:
         Strands-specific concerns: storing authorized results for tool shims,
         cancelling blocked/escalated tools, and recording escalations for the
         human approval workflow.
+
+        Fail-closed: if anything in this hook raises, the tool is cancelled.
+        An exception here must never result in an unguarded tool execution.
         """
+        try:
+            self._enforce(event)
+        except BaseException as error:  # noqa: BLE001 - deliberate fail-closed
+            tool_use_id = str(event.tool_use.get("toolUseId", ""))
+            reason = (
+                "SENTINEL BLOCK: the security guard failed while evaluating this "
+                "call, so it was refused. Do not retry; report the refusal."
+            )
+            self._refused[tool_use_id] = reason
+            event.cancel_tool = reason
+            self.policy._record(
+                "ERROR",
+                "Guard failed closed",
+                {
+                    "tool_name": str(event.tool_use.get("name", "")),
+                    "tool_use_id": tool_use_id,
+                    "error": f"{type(error).__name__}: {error}",
+                    "decision": "BLOCK",
+                },
+            )
+
+    def _enforce(self, event: BeforeToolCallEvent) -> None:
+        """Translate the Strands event and delegate to the PolicyEngine."""
         tool_use = event.tool_use
         tool_use_id = str(tool_use.get("toolUseId", ""))
         tool_name = str(tool_use.get("name", ""))

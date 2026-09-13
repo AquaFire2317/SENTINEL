@@ -36,7 +36,9 @@ Security invariants
 """
 
 import hashlib
+import hmac
 import json
+import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -66,19 +68,68 @@ def _normalize_types(obj):
 
 
 class ExecutionPermit:
-    """Token proving Sentinel ALLOWED this exact execution.
+    """Unforgeable, single-use token proving SENTINEL authorized this execution.
 
-    Permits should only be created by PolicyEngine._mint_permit().
-    Direct construction is permitted for testing but produces an
-    unverifiable permit that tool.call() will reject.
+    A permit binds four things:
+    - the exact tool name
+    - the exact canonicalized arguments (via ``signature``)
+    - the issuing run (``run_id``)
+    - the issuing PolicyEngine instance (via an HMAC under that engine's secret)
+
+    The ``token`` is ``HMAC-SHA256(engine_secret, run_id || signature || nonce)``.
+    ``signature_for()`` is public and unkeyed on purpose (it is a canonicalization
+    helper used for replay bookkeeping), so a permit must NOT be verified by
+    recomputing a signature. Verification requires the issuing engine's secret,
+    which never leaves the engine. Constructing ``ExecutionPermit(...)`` directly
+    therefore cannot produce a token any engine will accept.
+
+    Permits are single-use: the issuing engine records the nonce on redemption
+    and refuses it thereafter.
     """
 
-    def __init__(self, signature: str):
+    __slots__ = ("_tool_name", "_signature", "_run_id", "_nonce", "_token", "_issuer")
+
+    def __init__(
+        self,
+        signature: str,
+        tool_name: str = "",
+        run_id: str = "",
+        nonce: str = "",
+        token: str = "",
+        issuer: "PolicyEngine | None" = None,
+    ):
         self._signature = signature
+        self._tool_name = tool_name
+        self._run_id = run_id
+        self._nonce = nonce
+        self._token = token
+        self._issuer = issuer
 
     @property
     def matches(self) -> str:
+        """Canonical signature this permit authorizes (tool + arguments)."""
         return self._signature
+
+    @property
+    def tool_name(self) -> str:
+        return self._tool_name
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    @property
+    def nonce(self) -> str:
+        return self._nonce
+
+    @property
+    def token(self) -> str:
+        return self._token
+
+    @property
+    def issuer(self) -> "PolicyEngine | None":
+        """The PolicyEngine that minted this permit, or None if hand-constructed."""
+        return self._issuer
 
 
 class PolicyEngine:
@@ -105,6 +156,14 @@ class PolicyEngine:
         self.run_id = run_id
         self.policy_version = "v2"
         self._executed_signatures: set[str] = set()
+        # Per-engine secret used to sign ExecutionPermits. Never leaves the
+        # process and is never exposed through any public accessor. Because a
+        # permit token is an HMAC under this secret, permits cannot be forged
+        # by recomputing the (public, unkeyed) canonical signature.
+        self._permit_secret: bytes = secrets.token_bytes(32)
+        # Nonces of permits that have been minted and not yet redeemed.
+        # Redemption removes the nonce, making every permit single-use.
+        self._live_permits: set[str] = set()
 
     @staticmethod
     def signature_for(tool_name: str, arguments: dict) -> str:
@@ -120,9 +179,67 @@ class PolicyEngine:
     def _signature(cls, call: ToolCall) -> str:
         return cls.signature_for(call.tool_name, call.input)
 
+    def _permit_token(self, signature: str, nonce: str) -> str:
+        """HMAC binding a permit to this engine, this run, and these arguments."""
+        message = f"{self.run_id}|{signature}|{nonce}".encode()
+        return hmac.new(self._permit_secret, message, hashlib.sha256).hexdigest()
+
     def _mint_permit(self, call: ToolCall) -> ExecutionPermit:
-        """Create a one-time ExecutionPermit bound to the exact tool + arguments."""
-        return ExecutionPermit(self._signature(call))
+        """Create a single-use ExecutionPermit bound to tool + arguments + run."""
+        signature = self._signature(call)
+        nonce = secrets.token_hex(16)
+        self._live_permits.add(nonce)
+        return ExecutionPermit(
+            signature=signature,
+            tool_name=call.tool_name,
+            run_id=self.run_id,
+            nonce=nonce,
+            token=self._permit_token(signature, nonce),
+            issuer=self,
+        )
+
+    def verify_permit(
+        self,
+        permit: object,
+        tool_name: str,
+        arguments: dict,
+    ) -> bool:
+        """Return True only if this permit authorizes exactly this execution.
+
+        Fail-closed on every uncertainty. A permit is valid only when ALL hold:
+
+        1. It is an ExecutionPermit instance.
+        2. It was minted by THIS engine (HMAC verifies under this engine's
+           secret). This provides run isolation: a permit from another run was
+           signed with a different secret and will not verify here.
+        3. Its nonce is still live (it has not already been redeemed).
+        4. Its run_id matches this engine's run_id.
+        5. Its tool_name matches the tool being invoked.
+        6. Its signature matches the canonical signature of the exact arguments.
+        """
+        if not isinstance(permit, ExecutionPermit):
+            return False
+        if not permit.nonce or not permit.token:
+            return False
+        if permit.nonce not in self._live_permits:
+            return False
+        if permit.run_id != self.run_id:
+            return False
+        if permit.tool_name != tool_name:
+            return False
+        if permit.matches != self.signature_for(tool_name, arguments):
+            return False
+        expected = self._permit_token(permit.matches, permit.nonce)
+        return hmac.compare_digest(permit.token, expected)
+
+    def redeem_permit(self, permit: object) -> None:
+        """Consume a permit so it can never be used again."""
+        if isinstance(permit, ExecutionPermit) and permit.nonce:
+            self._live_permits.discard(permit.nonce)
+
+    def revoke_permit(self, permit: object) -> None:
+        """Invalidate an unused permit (e.g. after a failed execution)."""
+        self.redeem_permit(permit)
 
     # ---------------------------------------------------------------- evaluate
 
@@ -211,7 +328,13 @@ class PolicyEngine:
                 )
 
             permit = self._mint_permit(call)
-            result = execute(permit)
+            try:
+                result = execute(permit)
+            except BaseException:
+                # Never leave a usable permit behind after a failed execution.
+                self.revoke_permit(permit)
+                raise
+            self.redeem_permit(permit)
             if call.tool_name in SIDE_EFFECT_TOOLS:
                 self._executed_signatures.add(self._signature(call))
             return ToolObservation(
@@ -274,9 +397,11 @@ class PolicyEngine:
         try:
             result = execute(permit)
         except (TypeError, ValueError, KeyError, RuntimeError, PermissionError) as error:
+            self.revoke_permit(permit)
             self._record("ERROR", "Approved execution failed", {"error": str(error)})
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
+        self.redeem_permit(permit)
         self._executed_signatures.add(signature)
         self._record(
             "DECISION",

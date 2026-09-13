@@ -22,9 +22,30 @@ _EMAIL_ADDRESS = re.compile(r"[\w.+-]+@([\w-]+\.)+[\w-]{2,}")
 
 
 class ProcurementTools:
-    def __init__(self, store: FixtureStore, enforce_permits: bool = True):
+    """Fixture-backed procurement tools behind the SENTINEL authorization boundary.
+
+    Args:
+        store: Fixture store that records side effects.
+        enforce_permits: When True (default) every call must present a valid,
+            unused ExecutionPermit issued by the bound PolicyEngine.
+        issuer: The PolicyEngine that issues and authenticates permits for this
+            tool set. Required whenever ``enforce_permits`` is True; without it
+            permits cannot be authenticated and every call fails closed.
+    """
+
+    def __init__(
+        self,
+        store: FixtureStore,
+        enforce_permits: bool = True,
+        issuer: "PolicyEngine | None" = None,
+    ):
         self.store = store
         self.enforce_permits = enforce_permits
+        self.issuer = issuer
+
+    def bind_issuer(self, issuer: "PolicyEngine") -> None:
+        """Bind the PolicyEngine whose permits this tool set will accept."""
+        self.issuer = issuer
 
     def search_suppliers(self, query: str, max_results: int = 5) -> ToolResult:
         if max_results < 1 or max_results > 50:
@@ -142,14 +163,27 @@ class ProcurementTools:
         tool = getattr(self, tool_name, None)
         if callable(tool) is False or tool_name.startswith("_"):
             raise ValueError(f"Unknown procurement tool: {tool_name}")
-        if self.enforce_permits and not isinstance(permit, ExecutionPermit):
-            raise PermissionError(
-                f"Tool '{tool_name}' invoked without a Sentinel execution permit"
-            )
-        if self.enforce_permits and permit.matches != PolicyEngine.signature_for(
-            tool_name, arguments
-        ):
-            raise PermissionError(
-                f"Execution permit does not match tool '{tool_name}' call signature"
-            )
+        if self.enforce_permits:
+            if not isinstance(permit, ExecutionPermit):
+                raise PermissionError(
+                    f"Tool '{tool_name}' invoked without a Sentinel execution permit"
+                )
+            # Authenticate against the bound issuer when there is one (this
+            # additionally enforces run isolation at the tool boundary). When no
+            # issuer is bound, authenticate against the engine that minted the
+            # permit. A hand-constructed permit has no issuer and fails closed.
+            issuer = self.issuer if self.issuer is not None else permit.issuer
+            if issuer is None:
+                raise PermissionError(
+                    f"Execution permit for '{tool_name}' is not authenticatable: "
+                    "it was not issued by a SENTINEL PolicyEngine"
+                )
+            if not issuer.verify_permit(permit, tool_name, arguments):
+                raise PermissionError(
+                    f"Execution permit for '{tool_name}' is invalid: it was not "
+                    "issued by this PolicyEngine, has already been used, belongs "
+                    "to another run, or does not match this tool and arguments"
+                )
+            # Single-use: burn the permit before the side effect happens.
+            issuer.redeem_permit(permit)
         return tool(**arguments)
