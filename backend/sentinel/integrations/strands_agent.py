@@ -168,7 +168,7 @@ class SentinelStrandsAgent:
         ]
 
     def approve(self, approval_id: str, operator: str = "human") -> dict[str, Any] | None:
-        """Approve a pending escalation. Executes the tool through the security boundary.
+        """Approve a pending escalation. Executes through PolicyEngine.execute_approved().
 
         Returns the tool result data on success, or None if not found/not pending.
         """

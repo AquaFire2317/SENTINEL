@@ -147,6 +147,74 @@ class PolicyEngine:
             self._record("ERROR", "Policy evaluation failed closed", {"error": str(error)})
             return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
 
+    def execute_approved(
+        self,
+        call: ToolCall,
+        execute: Callable[..., ToolResult],
+    ) -> ToolObservation:
+        """Execute an already-approved side effect through the authoritative path.
+
+        This is the ONLY way an approved side effect may execute. It performs
+        the same validation as intercept() — allowlist, replay, permit minting,
+        signature recording — and adds a HUMAN_APPROVAL audit trail.
+
+        The caller (ApprovalManager) provides the execute callable that invokes
+        ProcurementTools.call(permit=...). PolicyEngine remains the sole
+        authority for minting the permit and recording the execution.
+        """
+        signature = self._signature(call)
+
+        if call.tool_name not in SIDE_EFFECT_TOOLS:
+            security_decision = SecurityDecision(
+                decision=Decision.BLOCK,
+                risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                reasons=[f"Tool '{call.tool_name}' is not a permitted side-effect tool"],
+                policy_version=self.policy_version,
+                required_approval=False,
+            )
+            self._record(
+                "DECISION",
+                f"BLOCK {call.tool_name}",
+                security_decision.model_dump(mode="json"),
+            )
+            return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
+        if signature in self._executed_signatures:
+            security_decision = SecurityDecision(
+                decision=Decision.BLOCK,
+                risk=RiskAssessment(score=100, level=RiskLevel.CRITICAL, evidence=[]),
+                reasons=["Duplicate side-effect call signature; replays are denied"],
+                policy_version=self.policy_version,
+                required_approval=False,
+            )
+            self._record(
+                "DECISION",
+                f"BLOCK {call.tool_name}",
+                security_decision.model_dump(mode="json"),
+            )
+            return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
+        permit = self._mint_permit(call)
+        try:
+            result = execute(permit)
+        except (TypeError, ValueError, KeyError, RuntimeError, PermissionError) as error:
+            self._record("ERROR", "Approved execution failed", {"error": str(error)})
+            return ToolObservation(call=call, decision=Decision.BLOCK, executed=False)
+
+        self._executed_signatures.add(signature)
+        self._record(
+            "DECISION",
+            f"APPROVED {call.tool_name}",
+            {
+                "decision": "APPROVED",
+                "authorization_source": "HUMAN_APPROVAL",
+                "tool_name": call.tool_name,
+                "signature": signature,
+                "policy_version": self.policy_version,
+            },
+        )
+        return ToolObservation(call=call, result=result, decision=Decision.ALLOW, executed=True)
+
     def _record(self, event_type: str, message: str, data: dict) -> None:
         self.audit.append(AuditEvent(
             event_id=f"audit-{len(self.audit) + 1}",
