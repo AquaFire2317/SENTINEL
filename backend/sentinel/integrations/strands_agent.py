@@ -22,9 +22,11 @@ from strands import Agent
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 
 from sentinel.approval.manager import ApprovalStatus
+from sentinel.config.settings import get_settings
 from sentinel.contracts.security import AuditEvent, Decision
+from sentinel.integrations.providers import build_model
 from sentinel.integrations.strands_guard import build_guarded_toolset
-from sentinel.integrations.strands_models import SYSTEM_PROMPT, ProcurementPlannerModel
+from sentinel.integrations.strands_models import SYSTEM_PROMPT
 from sentinel.security.policy import PolicyEngine
 from sentinel.tools.fixtures import FixtureStore
 
@@ -63,7 +65,12 @@ class SentinelStrandsAgent:
         self.guard, tools = build_guarded_toolset(
             store=store, policy=policy, run_id=self.run_id
         )
-        self.model = model if model is not None else ProcurementPlannerModel(vulnerable=vulnerable)
+        if model is not None:
+            self.model = model
+        elif get_settings().use_local_model:
+            self.model = build_model("local", vulnerable=vulnerable)
+        else:
+            self.model = build_model()
 
         conversation_manager = (
             SlidingWindowConversationManager(window_size=window_size)

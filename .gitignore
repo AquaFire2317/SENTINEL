@@ -14,9 +14,14 @@ build/
 venv/
 .venv/
 env/
+.venv*/
+.mypy_cache/
+.ruff_cache/
 
-# Environment variables
+# Environment variables (never commit real secrets)
 .env
+.env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -32,7 +37,31 @@ Thumbs.db
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
-# Ruff
-.ruff_cache/
+# Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Vercel
+.vercel
+
+# AWS CDK
+infra/cdk.out/
+infra/cdk.context.json
+infra/.cdk.staging/
+**/*.template.json
+
+# Terraform (if adopted)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
+
+# AWS credentials / keys
+.aws/
+*.pem
+*.key

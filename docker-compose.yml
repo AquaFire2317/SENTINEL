@@ -1,0 +1,31 @@
+services:
+  sentinel:
+    build: .
+    image: sentinel:local
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SENTINEL_PORT: "8080"
+      SENTINEL_SERVE_FRONTEND: "true"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Development-only hot-reload frontend. Not used in production.
+  frontend-dev:
+    image: node:20-slim
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm ci && npx vite --host 0.0.0.0"
+    depends_on:
+      - sentinel

@@ -14,31 +14,42 @@ Security design:
 """
 
 import json
+import threading
 from typing import Any
 
-from sentinel.integrations.strands_agent import SentinelStrandsAgent
 from sentinel.tools.fixtures import FixtureStore
 
-# Module-level state for the demo. In production this would be DynamoDB.
-_agent: SentinelStrandsAgent | None = None
+_agent: Any = None
+_agent_lock = threading.Lock()
 
 
-def _get_agent() -> SentinelStrandsAgent:
-    """Lazy-init a singleton agent for the approval demo."""
+def _get_agent() -> Any:
+    """Lazy-init a singleton agent for the approval demo.
+
+    Strands SDK is imported inside the function so the Vercel serverless
+    function can boot without it (approval routes degrade gracefully).
+    """
     global _agent
-    if _agent is None:
-        _agent = SentinelStrandsAgent(store=FixtureStore(poisoned=False), vulnerable=False)
-        _agent.run(
+    if _agent is not None:
+        return _agent
+    with _agent_lock:
+        if _agent is not None:
+            return _agent
+        from sentinel.integrations.strands_agent import SentinelStrandsAgent
+        agent = SentinelStrandsAgent(store=FixtureStore(poisoned=False), vulnerable=False)
+        agent.run(
             "Find the lowest-cost laptop supplier, compare prices, "
             "and prepare a purchase order for 10 units."
         )
-    return _agent
+        _agent = agent
+        return _agent
 
 
 def reset_agent() -> None:
     """Reset the demo agent (for fresh demo runs)."""
     global _agent
-    _agent = None
+    with _agent_lock:
+        _agent = None
 
 
 def get_pending_approvals() -> dict[str, Any]:
@@ -90,15 +101,19 @@ def approval_handler(event: dict[str, Any], context: Any = None) -> dict[str, An
     the backend-stored ApprovalRecord. A malicious client cannot inject
     arbitrary tool calls through this handler.
     """
-    method = event.get("httpMethod", "GET")
-    path = event.get("path", "/")
+    from sentinel.api.router import json_body, normalize_path, request_method
+
+    method = request_method(event)
+    path = normalize_path(event)
 
     if method == "POST" and path == "/approvals":
-        body = json.loads(event.get("body", "{}"))
+        body = json_body(event)
+        if not body and event.get("body"):
+            return _response(400, {"error": "Invalid JSON body"})
         approval_id = body.get("approval_id")
         decision = body.get("decision", "APPROVE")
         operator = body.get("operator", "human")
-        if not approval_id:
+        if not approval_id or not isinstance(approval_id, str):
             return _response(400, {"error": "approval_id is required"})
         if decision == "APPROVE":
             result = approve_action(approval_id, operator)

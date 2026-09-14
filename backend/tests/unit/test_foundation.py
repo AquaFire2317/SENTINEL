@@ -4,7 +4,7 @@ from sentinel.errors import ConfigurationError, SentinelError
 
 
 def test_package_has_version():
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.3.0"
 
 
 def test_settings_have_safe_local_defaults():

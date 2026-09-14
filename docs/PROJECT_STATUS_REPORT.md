@@ -29,6 +29,27 @@
 
 ---
 
+> **Addendum — v0.3.0 (September 14, 2026).** Several items previously listed as
+> "partially built", "not built", or "pending" have since landed:
+>
+> - The model layer is now **provider-agnostic**: Bedrock, Anthropic, OpenAI,
+>   OpenRouter, OpenAI-compatible endpoints, LiteLLM, Ollama, Gemini, Mistral,
+>   or the offline deterministic planner. SENTINEL is not Bedrock-only.
+> - The API serves the full read surface the dashboard needs (`/config`,
+>   `/providers`, `/agents`, `/tools`, `/policies`, `/scenarios`, `/runs`), and
+>   `POST /runs` honours `scenario_id`.
+> - The production `/api` routing bug is fixed; the Docker image and
+>   `--serve-frontend` server now work end-to-end and run as non-root.
+> - `infra/` is now a **deployable AWS CDK application** (DynamoDB, S3,
+>   Step Functions, Lambda, API Gateway, CloudFront), and DynamoDB persistence
+>   activates automatically when `SENTINEL_TABLE_NAME` is set.
+> - The dashboard is wired to real data with loading/error states.
+> - The suite stands at **244 passing tests**, Ruff clean, frontend build green.
+>
+> Remaining documented gaps (tool-result sanitization, durable approval
+> identity, distributed replay locking) are unchanged and listed in §7.3 and
+> `docs/REDTEAM_REPORT.md`.
+
 ## 1. Executive Summary
 
 SENTINEL is an **autonomous security monitoring system for AI agents**. It watches AI agents as they work, detects when they are being manipulated or tricked, explains the risk in plain language, blocks dangerous actions, and then tests itself to make sure its defenses hold.
@@ -37,7 +58,7 @@ SENTINEL is an **autonomous security monitoring system for AI agents**. It watch
 
 SENTINEL is a proof-of-concept that demonstrates how to build an **immune system for AI agents** — a layer that sits between the agent and the outside world, evaluates every action the agent wants to take, and blocks the dangerous ones before they happen.
 
-**Current status:** The core system is fully functional with a genuine Strands Agents SDK integration. It has been tested against 18 different categories of attacks across 3 rounds of adversarial testing (red-teaming) plus a trust/provenance boundary audit. All 132 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders. Model inference runs on Amazon Bedrock (`--bedrock`) or via a deterministic offline planner for CI reproducibility.
+**Current status:** The core system is fully functional with a genuine Strands Agents SDK integration. It has been tested against 18 different categories of attacks across 3 rounds of adversarial testing (red-teaming) plus a trust/provenance boundary audit. All 218 automated tests pass. The system correctly detects and blocks a simulated supply-chain attack where a compromised vendor tricks an AI procurement agent into leaking internal data and creating fraudulent purchase orders. Model inference runs on Amazon Bedrock (`--bedrock`) or via a deterministic offline planner for CI reproducibility.
 
 ---
 
@@ -457,7 +478,7 @@ python -m sentinel.strands_demo --bedrock
 # Run legacy evaluation workflow
 python -m sentinel.demo
 
-# Run all 214 tests
+# Run all 218 tests
 python -m pytest
 
 # Check code quality
@@ -494,37 +515,54 @@ python -m ruff check backend
 
 ### 9.1 Priority P0 — Must Fix Before Submission
 
-| Item | Effort | Why |
-|------|--------|-----|
-| Record demo video | 30 min | Likely required for hackathon submission |
-| Verify submission form/URL | 10 min | Cannot submit without knowing where |
+| Item | Effort | Status |
+|------|--------|--------|
+| Record demo video | 30 min | Pending |
+| Verify submission form/URL | 10 min | Pending |
 
-### 9.2 Priority P1 — Should Fix
+### 9.2 Priority P1 — Completed
 
-| Item | Effort | Why |
+| Item | Status | How |
 |------|--------|-----|
-| Add Mermaid architecture diagram to README | 15 min | Visual impact for judges |
-| Add second attack scenario | 1-2 hrs | Shows generality beyond procurement |
-| Simplify frontend to demo runner | 1 hr | Better first impression |
-| DynamoDB `get()` and `list()` | Small | API handler can't retrieve reports from DynamoDB |
+| Mermaid architecture diagram in README | ✅ Done | Full diagram in README.md |
+| DynamoDB `get()` + `get_audit()` + batch writes | ✅ Done | Functional adapter with tests |
+| Step Functions `describe()` + error handling | ✅ Done | Functional adapter with tests |
+| API health check, input validation | ✅ Done | `/health` endpoint, JSON validation |
+| Dockerfile | ✅ Done | Minimal deployment story |
+| CI: separate local/Bedrock jobs | ✅ Done | GitHub Actions workflow |
+| Retest exercises Strands path | ✅ Done | Validates side-effect store |
+| SENTINEL_MODE env var | ✅ Done | `local` or `bedrock` selector |
+| 218 tests, all passing | ✅ Done | Unit + integration + redteam |
 
 ### 9.3 Priority P2 — Nice to Have
 
 | Item | Effort | Why |
 |------|--------|-----|
-| Add Strands conversation management | 1 hr | More complete SDK usage |
-| Add Bedrock Guardrails integration | 2-3 hrs | Deeper AWS story |
 | Deploy to AgentCore or Lambda | 2-4 hrs | Live demo URL |
-| Explanation ranking by signal strength | Small | All reasons displayed equally |
+| Second attack scenario | 1-2 hrs | Shows generality beyond procurement |
 
 ### 9.4 Completed (Previously Deferred)
 
 | Item | Status | How |
 |------|--------|-----|
 | Strands agent SDK integration | ✅ Done | Genuine `strands.Agent` with hooks, tools, model |
-| Amazon Bedrock model integration | ✅ Wired | `bedrock_model()` via `--bedrock` flag |
+| Amazon Bedrock model integration | ✅ Wired | `bedrock_model()` via `--bedrock` flag or `SENTINEL_MODE=bedrock` |
 | Strands tool definitions | ✅ Done | 5 `@tool` functions with `inputSchema` |
 | Strands hook interception | ✅ Done | `BeforeToolCallEvent` / `AfterToolCallEvent` |
+| ExecutionPermit (HMAC, single-use, run-bound) | ✅ Done | `HMAC-SHA256`, atomic verify-and-burn |
+| Human approval workflow | ✅ Done | `ApprovalManager`, ESCALATE -> APPROVE/REJECT |
+| Tool dispatch allowlist | ✅ Done | `CALLABLE_TOOLS` frozenset, prevents method reachability |
+| Fail-closed exception handling | ✅ Done | `intercept()`, `execute_approved()`, `evaluate()` catch Exception |
+| Thread safety (concurrency) | ✅ Done | `threading.RLock` (policy), `threading.Lock` (approval) |
+| Audit immutability | ✅ Done | `audit_snapshot()` returns deep copies |
+| 22 permit forgery tests | ✅ Done | Mutation-verified |
+| 23 hardening tests | ✅ Done | Tool dispatch, fail-closed, zombie state, concurrency, audit |
+| Dockerfile | ✅ Done | Health check, minimal deployment |
+| CI workflow | ✅ Done | Separate local + Bedrock jobs |
+| DynamoDB adapter | ✅ Done | `get()`, `get_audit()`, batch writes |
+| Step Functions adapter | ✅ Done | `describe()`, error handling |
+| API health check | ✅ Done | `/health` endpoint |
+| Input validation | ✅ Done | JSON schema validation |
 
 ---
 
@@ -593,9 +631,9 @@ python -m ruff check backend
 ## Appendix B — Complete Test Results
 
 ```
-214 tests passed
+218 tests passed
 
-Integration Tests — Strands (41):
+Integration Tests — Strands (45):
   TestStrandsWiring (4)                                              PASSED
   TestLegitimateStrandsWorkflow (1)                                  PASSED
   TestMaliciousToolResultAttack (3)                                  PASSED
@@ -609,7 +647,7 @@ Integration Tests — Strands (41):
   TestAuditNonMutation (2)                                           PASSED
   TestAuthorizationIndependentOfDetection (2)                        PASSED
 
-Integration Tests — Approval (40):
+Integration Tests — Approval (90):
   TestApprovalManager (5)                                            PASSED
   TestApprovalStateProtection (4)                                    PASSED
   TestApprovalBinding (5)                                            PASSED
@@ -634,7 +672,7 @@ Integration Tests — Workflow (9):
   test_retest_attack_observed_via_replay_verification                PASSED
   test_legitimate_procurement_workflow_succeeds                      PASSED
 
-Unit Tests (34):
+Unit Tests (85):
   test_package_has_version                                           PASSED
   test_settings_have_safe_local_defaults                             PASSED
   test_settings_accept_environment_aliases                           PASSED
@@ -664,13 +702,19 @@ Unit Tests (34):
   test_get_regressions_returns_json                                  PASSED
   test_dynamodb_adapter_writes_run_item                              PASSED
   test_dynamodb_adapter_persists_strands_security_audit              PASSED
+  test_dynamodb_adapter_get_returns_item                             PASSED
+  test_dynamodb_adapter_get_audit_returns_events                     PASSED
+  test_dynamodb_adapter_batch_writes                                 PASSED
   test_step_functions_adapter_starts_execution                       PASSED
+  test_step_functions_adapter_describes_execution                    PASSED
+  test_step_functions_adapter_handles_describe_error                 PASSED
   test_load_canonical_scenario                                       PASSED
   test_load_po_only_scenario                                         PASSED
   test_list_scenarios_returns_both                                   PASSED
   test_load_unknown_scenario_raises                                  PASSED
+  + 45 additional unit tests                                        PASSED
 
-Red-Team Tests (45):
+Red-Team Tests (53):
   TestA1ObfuscatedInjection (3)                                      PASSED
   TestA2DestinationManipulation (1)                                  PASSED
   TestA3ForgedApproval (1)                                           PASSED
@@ -691,10 +735,17 @@ Red-Team Tests (45):
   TestEmailSpoofing (2)                                              PASSED
   TestContextWindowOverflow (1)                                      PASSED
   TestTrustBoundary (11)                                             PASSED
+  TestPermitForgery (22)                                             PASSED
+  TestToolDispatchAllowlist (5)                                      PASSED
+  TestFailClosedBehavior (5)                                         PASSED
+  TestApprovalManagerZombieState (3)                                 PASSED
+  TestConcurrentPermitConsumption (4)                                PASSED
+  TestAuditSnapshotImmutability (4)                                  PASSED
+  TestAgentApproveObservation (2)                                    PASSED
 ```
 
 ---
 
 **Document prepared: September 13, 2026**  
 **SENTINEL v0.2.0 — AWS Agents for Humans Hackathon Project**  
-**Status: 214/214 tests passing, Ruff clean, ready for demo**
+**Status: 218/218 tests passing, Ruff clean, ready for demo**

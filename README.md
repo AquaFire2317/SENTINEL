@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/AWS%20Hackathon-2026-e94560?style=for-the-badge&logo=amazonaws&logoColor=white" alt="AWS Hackathon"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"/>
   <img src="https://img.shields.io/badge/python-3.11+-yellow?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"/>
-  <img src="https://img.shields.io/badge/tests-214+-00c896?style=for-the-badge" alt="214 Tests"/>
+  <img src="https://img.shields.io/badge/tests-244+-00c896?style=for-the-badge" alt="244 Tests"/>
 </p>
 
 <h1 align="center">SENTINEL</h1>
@@ -82,10 +82,16 @@ The agent in this project is a real `strands.Agent`:
 SENTINEL is registered as a Strands `HookProvider`. That is the integration seam — no
 forking, no monkey-patching, no reimplementation of the agent framework.
 
-Model inference runs on **Amazon Bedrock** (`strands.models.BedrockModel`). A deterministic
-local planner (`ProcurementPlannerModel`, implementing the same Strands `Model` interface) is
-used for the offline demo and CI so the security guarantees are reproducible without
-credentials or model nondeterminism.
+SENTINEL is **provider-agnostic**. The agent is driven by any Strands-supported model:
+Amazon Bedrock, Anthropic Claude, OpenAI, **OpenRouter**, any OpenAI-compatible endpoint,
+LiteLLM, Ollama, Google Gemini, or Mistral. The security guarantee does not depend on the
+model: every tool call is gated by the PolicyEngine before it can execute, so a hosted
+OpenRouter model is contained exactly like a local one.
+
+Set the provider with `SENTINEL_MODEL_PROVIDER` (see [Model providers](#model-providers)).
+A deterministic local planner (`ProcurementPlannerModel`, implementing the same Strands
+`Model` interface) is the default for the offline demo and CI, so the security guarantees
+are reproducible without credentials or model nondeterminism.
 
 ### Why the tools cannot be bypassed
 
@@ -189,43 +195,63 @@ with a valid approval id. This is the intended policy, not a bug.
 
 | Service | How it is used | Status |
 |---|---|---|
-| **Amazon Bedrock** | Model inference for the Strands agent via `strands.models.BedrockModel` | Wired (`--bedrock`) |
-| **DynamoDB** | Durable per-run security audit trail and evaluation reports | Adapter + tests |
-| **Step Functions** | Durable orchestration of evaluation runs | Adapter + tests |
-| **Lambda / API Gateway** | `sentinel.api.handler` is an API Gateway-compatible handler (no web framework required) | Handler + tests |
+| **Amazon Bedrock** | One of several model providers (`strands.models.BedrockModel`) | Wired (optional) |
+| **DynamoDB** | Durable per-run security audit trail and evaluation reports | Adapter + CDK stack |
+| **S3** | Artifact storage and dashboard hosting | CDK stack |
+| **Step Functions** | Durable orchestration of evaluation runs | Adapter + CDK stack |
+| **Lambda / API Gateway** | `sentinel.api.handler` is an API Gateway-compatible handler | Handler + CDK stack |
+| **CloudFront** | Serves the dashboard and proxies `/api/*` to the API | CDK stack |
 
 The AWS adapters accept injected clients, so they are exercised in CI without credentials.
-`infra/` is a deployment skeleton, not a deployed stack — see `infra/README.md`.
+`infra/` now contains a deployable CDK application — see `infra/README.md`. When
+`SENTINEL_TABLE_NAME` is set, the API automatically uses DynamoDB for durable audit.
 
 ---
 
 ## Setup
 
-Requires **Python 3.11+** (developed on 3.13).
+Requires **Python 3.11+** and **Node.js 18+**.
 
-<details>
-<summary><strong>Windows (PowerShell)</strong></summary>
-
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-```
-
-</details>
-
-<details>
-<summary><strong>macOS / Linux</strong></summary>
+### Quick Start (Development)
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
+# Backend
+python -m venv .venv
+source .venv/bin/activate  # or .\.venv\Scripts\Activate.ps1 on Windows
+pip install -e .
+
+# Frontend
+cd frontend && npm install && cd ..
+
+# Start both (two terminals)
+python -m sentinel.dev_server 8080   # API on :8080
+cd frontend && npm run dev           # UI on :5173
 ```
 
-</details>
+Open **http://localhost:5173**. Click "Continue in Demo Mode" on first run.
 
-`strands-agents` is a core dependency and is installed automatically. `boto3` arrives with it.
+### Docker (Production)
+
+```bash
+# Build and run everything
+docker compose up --build
+
+# Or just the API + frontend
+docker build -t sentinel .
+docker run -p 8080:8080 sentinel
+```
+
+Open **http://localhost:8080** — serves both API and frontend.
+
+### Frontend Only (Development)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite proxies `/api` requests to `localhost:8080`. Start the backend separately.
 
 ### Environment variables
 
@@ -233,18 +259,56 @@ All are optional; the project runs fully offline without them.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `BEDROCK_MODEL_ID` | Bedrock model for `--bedrock` runs | unset |
+| `SENTINEL_MODEL_PROVIDER` | Model provider id (see below) | `local` |
+| `SENTINEL_MODEL_ID` | Model id for the selected provider | provider default |
+| `SENTINEL_MODEL_API_KEY` | API key for hosted providers | unset |
+| `SENTINEL_MODEL_BASE_URL` | Base URL for OpenAI-compatible endpoints | provider default |
+| `SENTINEL_MODE` | Legacy alias; `bedrock` selects Bedrock if no provider is set | `local` |
+| `BEDROCK_MODEL_ID` | Bedrock model id fallback | unset |
 | `AWS_REGION` | AWS region | `us-east-1` |
-| `SENTINEL_TABLE_NAME` | DynamoDB table | unset |
+| `SENTINEL_TABLE_NAME` | DynamoDB table (enables durable audit) | unset |
+| `SENTINEL_BUCKET_NAME` | S3 artifact bucket | unset |
 | `SENTINEL_STATE_MACHINE_ARN` | Step Functions state machine | unset |
 | `SENTINEL_ENV` | Environment label | `local` |
 | `SENTINEL_LOG_LEVEL` | Log level | `INFO` |
+| `SENTINEL_HOST` / `SENTINEL_PORT` | Server bind address | `0.0.0.0` / `8080` |
+| `SENTINEL_CORS_ORIGIN` | CORS allow-origin | `*` |
 
-For Bedrock runs, configure credentials normally (`aws configure`) and:
+### Model providers
+
+| Provider id | SDK (install) | Notes |
+|---|---|---|
+| `local` | none | Deterministic planner, offline (default) |
+| `bedrock` | `boto3` | Uses the AWS credential chain |
+| `anthropic` | `pip install anthropic` | Claude direct |
+| `openai` | `pip install openai` | OpenAI |
+| `openrouter` | `pip install openai` | OpenAI-compatible gateway |
+| `openai_compatible` | `pip install openai` | Requires `SENTINEL_MODEL_BASE_URL` |
+| `litellm` | `pip install litellm` | 100+ providers via one interface |
+| `ollama` | `pip install ollama` | Local models |
+| `gemini` | `pip install google-genai` | Google Gemini |
+| `mistral` | `pip install mistralai` | Mistral AI |
 
 ```bash
-export BEDROCK_MODEL_ID="us.anthropic.claude-sonnet-4-20250514-v1:0"
+# OpenRouter example
+export SENTINEL_MODEL_PROVIDER="openrouter"
+export SENTINEL_MODEL_ID="anthropic/claude-3.7-sonnet"
+export SENTINEL_MODEL_API_KEY="sk-or-..."
+
+# Bedrock example (uses the AWS credential chain)
+export SENTINEL_MODEL_PROVIDER="bedrock"
+export SENTINEL_MODEL_ID="us.anthropic.claude-3-5-sonnet-20241022-v2:0"
 export AWS_REGION="us-east-1"
+```
+
+`pip install -e ".[providers]"` installs every optional provider SDK.
+
+### Docker
+
+```bash
+docker build -t sentinel .
+docker run sentinel                          # local demo
+docker run -e SENTINEL_MODE=bedrock sentinel  # Bedrock mode
 ```
 
 ---
@@ -259,7 +323,9 @@ python -m sentinel.strands_demo
 python -m sentinel.strands_demo attack
 python -m sentinel.strands_demo legitimate
 
-# Real Bedrock inference
+# Real inference on any provider
+python -m sentinel.strands_demo --provider openrouter
+python -m sentinel.strands_demo --provider anthropic
 python -m sentinel.strands_demo --bedrock
 ```
 
@@ -292,7 +358,7 @@ assert store.emails == []           # nothing escaped
 ## Tests
 
 ```bash
-pytest                                              # everything (214 tests)
+pytest                                              # everything (244 tests)
 pytest backend/tests/unit                           # unit
 pytest backend/tests/integration                    # integration (incl. Strands + approval)
 pytest backend/tests/redteam                        # adversarial suite
@@ -306,9 +372,9 @@ python -m ruff check backend                        # lint
 
 | Suite | Tests | What it covers |
 |---|---|---|
-| **Unit** | 60+ | Policy engine, risk scoring, tools, agents, API, AWS adapters, config, scenario loader |
-| **Integration** | 10+ | Full evaluation workflow, Strands agent + SENTINEL guard, approval workflow |
-| **Red Team** | 30+ | Prompt injection, keyword obfuscation, zero-width chars, separator splitting, homoglyph domains, external exfiltration, trusted-domain edge cases, forged approvals, replay, type-coercion replay, cross-tool permit reuse, cross-run state isolation, trust-boundary manipulation, unknown tools, malformed input, retest integrity |
+| **Unit** | 85+ | Policy engine, risk scoring, tools, agents, API, AWS adapters, config, scenario loader |
+| **Integration** | 80+ | Full evaluation workflow, Strands agent + SENTINEL guard, approval workflow |
+| **Red Team** | 53+ | Prompt injection, keyword obfuscation, zero-width chars, separator splitting, homoglyph domains, external exfiltration, trusted-domain edge cases, forged approvals, replay, type-coercion replay, cross-tool permit reuse, cross-run state isolation, trust-boundary manipulation, unknown tools, malformed input, retest integrity, permit forgery (22 mutation-verified), hardening (23 concurrency/audit/zombie) |
 
 </details>
 
@@ -323,7 +389,8 @@ SENTINEL/
 │   │   ├── integrations/          # Strands integration layer
 │   │   │   ├── strands_guard.py   #   SENTINEL hook + Strands tool definitions
 │   │   │   ├── strands_agent.py   #   the Strands Agent assembly
-│   │   │   └── strands_models.py  #   Bedrock + deterministic planner providers
+│   │   │   ├── providers.py       #   provider-agnostic model factory
+│   │   │   └── strands_models.py  #   deterministic planner provider
 │   │   ├── approval/              # human approval workflow
 │   │   │   └── manager.py         #   ApprovalManager: ESCALATE → APPROVE/REJECT
 │   │   ├── security/              # risk engine, policy engine, permits, audit
@@ -338,14 +405,16 @@ SENTINEL/
 │   │   ├── agents/                # legacy deterministic agent
 │   │   ├── persistence/           # DynamoDB + in-memory adapters
 │   │   ├── orchestration/         # Step Functions adapter
-│   │   ├── api/                   # API Gateway-compatible handler + approval endpoints
+│   │   ├── api/                   # handler, router, catalog, approval + Lambda entry
+│   │   ├── config/                # environment-backed settings
+│   │   ├── persistence/factory.py #   memory or DynamoDB selection
 │   │   ├── strands_demo.py        # Strands demo entry point
 │   │   └── demo.py                # legacy evaluation demo
 │   └── tests/                     # unit / integration / redteam
 ├── docs/                          # architecture, red-team report, status report
 ├── scenarios/                     # attack scenario definitions
-├── frontend/                      # security dashboard UI
-└── infra/                         # AWS deployment skeleton
+├── frontend/                      # security dashboard UI (React + Vite)
+└── infra/                         # AWS CDK application (data/compute/workflow/api)
 ```
 
 ---
@@ -360,7 +429,8 @@ SENTINEL/
   validated against recorded observations.
 - **No generic prompt sanitization.** Injection text reaches the model unmodified by design;
   the defense is the execution gate, not input scrubbing.
-- **`infra/` is a skeleton.** AWS adapters are real and tested; no stack is deployed.
+- **In-memory state by default.** Durable audit requires `SENTINEL_TABLE_NAME` (the CDK
+  `SentinelDataStack` sets it automatically); without it, runs and approvals are per-process.
 
 ---
 
