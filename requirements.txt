@@ -1,6 +1,4 @@
 # Dependencies installed by the Vercel build (see vercel.json).
-# The serverless function serves the API; the model provider is selected with
-# SENTINEL_MODEL_PROVIDER. `local` (deterministic) needs no extra SDK.
-flask>=3.0,<4
-pydantic>=2.7,<3
-pydantic-settings>=2.2,<3
+flask==3.1.1
+pydantic==2.11.7
+pydantic-settings==2.10.1

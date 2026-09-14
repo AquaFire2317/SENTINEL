@@ -2,11 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
+  "installCommand": "pip install -r requirements.txt",
   "framework": null,
   "regions": ["iad1"],
   "functions": {
     "api/index.py": {
-      "runtime": "@vercel/python@3",
       "memory": 1024,
       "maxDuration": 30
     }
