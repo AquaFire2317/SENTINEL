@@ -1,4 +1,5 @@
 <p align="center">
+  <a href="https://sentinel-ai-teal-eight.vercel.app"><img src="https://img.shields.io/badge/LIVE_DEMO-Vercel-000000?style=for-the-badge&logo=vercel&logoColor=white" alt="Live Demo on Vercel"/></a>
   <img src="https://img.shields.io/badge/strands--agents-genuine%20integration-00c896?style=for-the-badge&logo=python&logoColor=white" alt="Strands Agents"/>
   <img src="https://img.shields.io/badge/AWS%20Hackathon-2026-e94560?style=for-the-badge&logo=amazonaws&logoColor=white" alt="AWS Hackathon"/>
   <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"/>
@@ -14,6 +15,7 @@
 </p>
 
 <p align="center">
+  <a href="https://sentinel-ai-teal-eight.vercel.app"><strong>Live Demo</strong></a> ·
   <a href="#the-problem">Problem</a> ·
   <a href="#what-sentinel-does">Solution</a> ·
   <a href="#role-of-strands-agents">Strands</a> ·
