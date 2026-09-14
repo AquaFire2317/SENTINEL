@@ -1,71 +1,99 @@
-"""Vercel serverless entry point for the SENTINEL API.
+"""Vercel serverless function: SENTINEL API.
 
-Exposes a WSGI (Flask) app so Vercel's Python runtime can detect it, then hands
-every ``/api/*`` request to the shared :func:`sentinel.api.router.dispatch`.
+Zero-dependency WSGI app using only stdlib. No Flask needed.
+Dispatches /api/* routes to the existing SENTINEL backend handlers.
 """
 
-from __future__ import annotations
-
+import json
 import os
 import sys
 from typing import Any
 
-from flask import Flask
-from flask import Response as FlaskResponse
-from flask import request
-
-# Make the backend package importable in the Vercel build.
+# ---------------------------------------------------------------------------
+# Bootstrap backend imports
+# ---------------------------------------------------------------------------
 _backend_dir = os.path.join(os.path.dirname(__file__), "..", "backend")
 if _backend_dir not in sys.path:
     sys.path.insert(0, _backend_dir)
 
-from sentinel.api.router import dispatch  # noqa: E402
+from sentinel.api.approval_handler import approval_handler
+from sentinel.api.handler import handler as api_handler
 
-app = Flask(__name__)
+# ---------------------------------------------------------------------------
+# WSGI helpers
+# ---------------------------------------------------------------------------
+
+_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Cache-Control": "no-store",
+}
 
 
-def _build_event(path: str, method: str, body: str | None) -> dict[str, Any]:
-    return {
+def _json_response(
+    environ: dict[str, Any],
+    start_response: Any,
+    status: str,
+    body: dict[str, Any],
+) -> list[bytes]:
+    payload = json.dumps(body).encode()
+    headers = list(_CORS_HEADERS.items()) + [
+        ("Content-Type", "application/json"),
+        ("Content-Length", str(len(payload))),
+    ]
+    start_response(status, headers)
+    return [payload]
+
+
+def _route(path: str, method: str, body_text: str | None) -> dict[str, Any]:
+    event: dict[str, Any] = {
         "httpMethod": method,
         "path": path,
         "rawPath": path,
-        "body": body,
-        "isBase64Encoded": False,
-        "requestContext": {"http": {"method": method, "path": path}},
+        "body": body_text,
+        "requestContext": {"http": {"method": method}},
     }
+    if path.startswith("/approvals"):
+        return approval_handler(event)
+    return api_handler(event)
 
 
-@app.after_request
-def _add_headers(response: FlaskResponse) -> FlaskResponse:
-    try:
-        from sentinel.config.settings import get_settings
+# ---------------------------------------------------------------------------
+# WSGI application (Vercel auto-detects this callable)
+# ---------------------------------------------------------------------------
 
-        origin = get_settings().cors_origin or "*"
-    except Exception:  # noqa: BLE001 - never break responses over config
-        origin = "*"
-    response.headers["Access-Control-Allow-Origin"] = origin
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    response.headers["Cache-Control"] = "no-store"
-    return response
+def application(environ: dict[str, Any], start_response: Any) -> list[bytes]:
+    method = environ.get("REQUEST_METHOD", "GET")
+    raw_path = environ.get("PATH_INFO", "/")
 
-
-@app.route("/api/<path:path>", methods=["GET", "POST", "OPTIONS"])
-@app.route("/api", defaults={"path": ""}, methods=["GET", "POST", "OPTIONS"])
-def catch_all(path: str) -> FlaskResponse:
-    method = request.method
     if method == "OPTIONS":
-        return FlaskResponse(status=204)
+        return _json_response(environ, start_response, "204 No Content", {})
 
-    full_path = request.path or "/"
-    raw = request.get_data(as_text=True) or None
-    event = _build_event(full_path, method, raw)
+    # Read request body
+    content_length = int(environ.get("CONTENT_LENGTH") or 0)
+    body_text = environ["wsgi.input"].read(content_length).decode() if content_length else None
 
-    result = dispatch(event)
-    status = int(result.get("statusCode", 200))
-    body = result.get("body", "{}")
-    content_type = (result.get("headers") or {}).get("content-type", "application/json")
-    if not isinstance(body, str):
-        import json
+    # Route — strip /api prefix if present
+    path = raw_path
+    if path.startswith("/api"):
+        path = path[4:] or "/"
 
-        body = json.dumps(body)
-    return FlaskResponse(response=body, status=status, content_type=content_type)
+    result = _route(path, method, body_text)
+    status_code = result.get("statusCode", 200)
+    body_str = result.get("body", "{}")
+
+    status_map = {200: "200 OK", 201: "201 Created", 400: "400 Bad Request", 404: "404 Not Found"}
+    status = status_map.get(status_code, f"{status_code} Unknown")
+
+    payload = body_str.encode()
+    headers = list(_CORS_HEADERS.items()) + [
+        ("Content-Type", "application/json"),
+        ("Content-Length", str(len(payload))),
+    ]
+    start_response(status, headers)
+    return [payload]
+
+
+# Vercel also looks for "app" as the WSGI entry point
+app = application

@@ -1,4 +1,2 @@
-# Dependencies installed by the Vercel build (see vercel.json).
-flask==3.1.1
-pydantic==2.11.7
-pydantic-settings==2.10.1
+pydantic>=2.0
+pydantic-settings>=2.0
